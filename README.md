@@ -77,6 +77,7 @@ start.bat
 | 有效性 | `42 Validity Value` | 曲线拟合有效性 |
 | SNR | `48 Signal To Noise` | 信噪比 |
 | 扩增效率 | `49 Amplification Efficiency` | |
+| 算法配置 | `analysis.adf` | 按染料自动选择：SYBR → `Sybr-KA.adf`，探针(FAM/Yellow555) → `Gen-KA.adf` |
 | 最优模型 | `41 Optimal Model` | Model2/3/4 择优 |
 
 ## 验证

@@ -76,6 +76,14 @@ function fmtNum(v, d) {
   return String(Math.round(v * Math.pow(10, d)) / Math.pow(10, d));
 }
 
+function renderAdfInfo() {
+  const exp = state.exp;
+  if (!exp || !exp.analysis || !exp.analysis.adf) return;
+  E.plateTitle.textContent = '';
+  const el = document.querySelector('#adfInfo');
+  if (el) el.textContent = '算法配置: ' + exp.analysis.adf + (exp.analyzedAt ? ' · 已计算' : '');
+}
+
 // ---------------- render: channel select ----------------
 function renderChannelSelect() {
   const dyes = state.exp.dyes || [];
@@ -97,8 +105,10 @@ function renderPlate() {
     const div = document.createElement('div');
     div.className = 'well' + (hasCurve ? '' : ' empty') + (state.selectedWell === w.id ? ' selected' : '');
     div.style.background = hasCurve ? wellColor(d) : '#1d2537';
-    div.innerHTML = '<span class="well-label">' + w.label + '</span>';
-    div.title = w.label + (w.sampleName ? ' · ' + w.sampleName : '') + (d.call ? ' · ' + d.call : '');
+    // 孔内显示：样本名（主）+ 孔位号（副），与原软件 Plate View 一致
+    const sampleText = (w.sampleName || '').replace(/^Sample\s*/i, '') || w.label;
+    div.innerHTML = '<span class="well-label">' + sampleText + '</span><span class="well-pos">' + w.label + '</span>';
+    div.title = w.label + (w.sampleName ? ' · ' + w.sampleName : '') + (d.call ? ' · ' + d.call : '') + (d.cq !== null && d.cq !== undefined ? ' · Cq=' + d.cq : '');
     div.onclick = () => { state.selectedWell = (state.selectedWell === w.id ? null : w.id); renderPlate(); renderChart(); renderDetail(); };
     E.plate.appendChild(div);
   }
@@ -318,6 +328,7 @@ async function onAnalyze() {
 }
 
 function renderAll() {
+  renderAdfInfo();
   renderChannelSelect();
   renderPlate();
   renderLegend();
