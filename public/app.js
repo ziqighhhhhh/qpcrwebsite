@@ -40,9 +40,13 @@ function dyeData(wellId, dye) {
   const sq = (exp.storedQual && exp.storedQual[key]) || null;
   const sk = (exp.storedKinetic && exp.storedKinetic[key]) || null;
   const curve = exp.curves.find(x => x.well === wellId && x.dye === dye) || null;
+  const call = c['11 Intermediate Call'] !== undefined ? c['11 Intermediate Call'] : (sq ? (sq.call || '') : '');
+  const rawCq = c['26 CT1'] !== undefined ? c['26 CT1'] : (sq && sq.cq !== undefined ? sq.cq : null);
   return {
-    call: c['11 Intermediate Call'] !== undefined ? c['11 Intermediate Call'] : (sq ? (sq.call || '') : ''),
-    cq: c['26 CT1'] !== undefined ? c['26 CT1'] : (sq && sq.cq !== undefined ? sq.cq : null),
+    call,
+    // 与原软件一致：仅 Positive 显示 Cq；Negative 显示空（"-"）
+    cq: call === 'Positive' ? rawCq : null,
+    rawCq,
     slope: c['23 MRS'] !== undefined ? c['23 MRS'] : (sq && sq.slope !== undefined ? sq.slope : (sk ? sk.slope : null)),
     epf: c['78 LC96 Normalized ERI'] !== undefined ? c['78 LC96 Normalized ERI'] : (sq && sq.epf !== undefined ? sq.epf : null),
     params: Object.keys(c).length ? c : null,
@@ -175,7 +179,7 @@ function renderDetail() {
   const d = dyeData(w.id, dye);
   E.detailTitle.textContent = '· ' + w.label + ' · ' + dye + ' · ' + (w.sampleName || '无样本');
   const rows = [];
-  rows.push(['Well', w.label], ['Position', String(w.id)], ['Sample', w.sampleName || '—'], ['SampleType', w.sampleType || '—']);
+  rows.push(['Well', w.label], ['Position', String(w.id)], ['Sample', w.sampleName || '—'], ['SampleType', w.sampleType || '—'], ['显示Cq(原软件规则)', d.cq === null || d.cq === undefined ? '— (Negative 不显示)' : String(d.cq)]);
   if (d.params) {
     const order = ['11 Intermediate Call', '12 Qualitative Result', '26 CT1', '27 CT2', '23 MRS', '78 LC96 Normalized ERI', '24 ERI', '21 RFI', '22 F Value', '48 Signal To Noise', '49 Amplification Efficiency', '41 Optimal Model', '42 Validity Value', '43 Relative Validity Value', '45 SEy', '46 SECT1', '47 SECT2', '61 Number Of Outliers', '62 Number Of Iterations', '51 NCE Left', '52 NCE Right', '31 p1', '31 p2', '31 p3', '31 p4', '31 p5', '31 p6', '31 p7', '31 p8', '31 p9', '32 p10', '32 p11'];
     const keys = Object.keys(d.params);
