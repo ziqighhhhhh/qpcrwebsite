@@ -17,12 +17,21 @@ if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
 const { parseLc96p } = require('./lib/lc96p.js');
 const { toCSV, toJSON, toXLSX } = require('./lib/export.js');
+const { readZip } = require('./lib/zip.js');
+const sim = require('./lib/simulate.js');
+const { compareGroups } = require('./lib/compare.js');
 const engine = require('./lib/engine.js');
 engine.configure({ binDir: config.binDir, projectDir, adf: config.adf || 'Gen-KA.adf' });
+
+const experimentsDir = config.experimentsDir || path.join(path.dirname(config.binDir), 'experiments');
+const controlsDir = path.join(dataDir, 'controls');
+if (!fs.existsSync(controlsDir)) fs.mkdirSync(controlsDir, { recursive: true });
 
 // ---- single source of truth ----
 let experiment = null;
 let expFile = null;
+let controlExperiment = null;   // simulated control group (if generated)
+let controlFile = null;
 
 function saveExperiment() {
   if (!experiment) return;
@@ -154,6 +163,75 @@ const server = http.createServer(async (req, res) => {
         });
         res.end(buf);
       }
+      return;
+    }
+    if (req.method === 'GET' && p === '/api/experiments') {
+      let files = [];
+      try {
+        files = fs.readdirSync(experimentsDir)
+          .filter(f => /\.lc96p$/i.test(f))
+          .map(f => {
+            const st = fs.statSync(path.join(experimentsDir, f));
+            return { name: f, size: st.size, date: st.mtime.toISOString() };
+          });
+      } catch (e) { /* dir missing */ }
+      sendJson(res, 200, { ok: true, dir: experimentsDir, files });
+      return;
+    }
+    if (req.method === 'POST' && p === '/api/simulate') {
+      try {
+        const body = await readBody(req, 1 * 1024 * 1024);
+        const opts = JSON.parse(body.toString('utf8').replace(/^\uFEFF/, ''));
+        const sourceName = opts.source;
+        if (!sourceName || /\.\./.test(sourceName)) { sendJson(res, 400, { error: 'invalid source' }); return; }
+        const srcPath = path.join(experimentsDir, sourceName);
+        if (!fs.existsSync(srcPath)) { sendJson(res, 404, { error: 'source not found' }); return; }
+        const deltaCt = Math.min(15, Math.max(1, parseInt(opts.deltaCt, 10) || 8));
+        const buf = fs.readFileSync(srcPath);
+        const treat = parseLc96p(buf, sourceName);
+        if (!Object.keys(treat.computed || {}).length) {
+          await engine.analyzeExperiment(treat); // ensure treatment group is analyzed
+        }
+        const ctrl = sim.buildControl(treat, { deltaCt });
+        await engine.analyzeExperiment(ctrl);    // run the real engine on the control group
+        controlExperiment = ctrl;
+        const ctrlBytes = sim.toLc96p(ctrl, readZip(buf));
+        controlFile = path.join(controlsDir, ctrl.name.replace(/[^\w.\-]/g, '_'));
+        fs.writeFileSync(controlFile, ctrlBytes);
+        const comp = compareGroups(treat, ctrl, ctrl.wells.length);
+        sendJson(res, 200, {
+          ok: true,
+          treatment: { id: treat.id, name: treat.name, analyzedAt: treat.analyzedAt },
+          control: { id: ctrl.id, name: ctrl.name, analyzedAt: ctrl.analyzedAt, file: controlFile },
+          compare: comp,
+        });
+      } catch (e) {
+        sendJson(res, 500, { error: 'simulate failed: ' + e.message });
+      }
+      return;
+    }
+    if (req.method === 'GET' && p === '/api/compare') {
+      if (!experiment || !controlExperiment) { sendJson(res, 404, { error: 'need experiment + control (run /api/simulate first)' }); return; }
+      const comp = compareGroups(experiment, controlExperiment, experiment.wells.length);
+      sendJson(res, 200, { ok: true, treatment: experiment.name, control: controlExperiment.name, compare: comp });
+      return;
+    }
+    if (req.method === 'POST' && p === '/api/load-control') {
+      if (!controlExperiment) { sendJson(res, 404, { error: 'no control experiment (run /api/simulate first)' }); return; }
+      experiment = controlExperiment;
+      saveExperiment();
+      sendJson(res, 200, { ok: true, experiment: summary() });
+      return;
+    }
+    if (req.method === 'GET' && p === '/api/control') {
+      if (!controlFile || !fs.existsSync(controlFile)) { sendJson(res, 404, { error: 'no control file' }); return; }
+      const name = path.basename(controlFile);
+      const data = fs.readFileSync(controlFile);
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Disposition': 'attachment; filename="' + name + '"',
+      });
+      res.end(data);
       return;
     }
     if (req.method === 'POST' && p === '/api/upload') {

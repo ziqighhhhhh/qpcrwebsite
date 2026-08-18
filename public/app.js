@@ -19,6 +19,11 @@ const E = {
   curveCanvas: $('curveCanvas'), chartTitle: $('chartTitle'), chartLegend: $('chartLegend'),
   detailTitle: $('detailTitle'), detailTable: $('detailTable'), resultTable: $('resultTable'),
   tableTitle: $('tableTitle'),
+  simSource: $('simSource'), simDelta: $('simDelta'), simDeltaLabel: $('simDeltaLabel'),
+  btnSimulate: $('btnSimulate'), btnLoadControl: $('btnLoadControl'),
+  btnDownloadControl: $('btnDownloadControl'), simStatus: $('simStatus'),
+  simResult: $('simResult'), compareCards: $('compareCards'),
+  compareCanvas: $('compareCanvas'), compareVerdict: $('compareVerdict'),
 };
 
 // ---------------- api ----------------
@@ -341,6 +346,128 @@ function renderAll() {
   renderTable();
 }
 
+// ---------------- simulation ----------------
+let simData = null; // last simulate response
+
+async function loadExperiments() {
+  try {
+    const r = await fetch('/api/experiments');
+    const res = await r.json();
+    if (!res.ok || !res.files) return;
+    E.simSource.innerHTML = res.files.map(f =>
+      '<option value="' + f.name.replace(/"/g, '&quot;') + '">' + f.name + ' (' + Math.round(f.size / 1024) + ' KB)</option>').join('');
+    // preselect current experiment name if present
+    if (state.exp && state.exp.name) E.simSource.value = state.exp.name;
+  } catch (e) { /* server may not have experimentsDir */ }
+}
+
+async function onSimulate() {
+  E.btnSimulate.disabled = true;
+  E.simStatus.textContent = '正在生成对照组并调用原引擎分析两组（约 2-5 秒）…';
+  try {
+    const body = JSON.stringify({ source: E.simSource.value, deltaCt: parseInt(E.simDelta.value, 10) });
+    const r = await fetch('/api/simulate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+    const res = await r.json();
+    if (!r.ok) throw new Error(res.error || 'simulate failed');
+    simData = res;
+    renderCompare(res.compare);
+    E.simResult.hidden = false;
+    E.btnLoadControl.disabled = false;
+    E.btnDownloadControl.disabled = false;
+    E.btnDownloadControl.href = '/api/control';
+    E.btnDownloadControl.setAttribute('download', '');
+    E.simStatus.textContent = '对照组已生成并分析完成：' + res.control.name;
+    E.simStatus.className = 'status ok';
+  } catch (e) {
+    E.simStatus.textContent = '生成失败: ' + e.message;
+    E.simStatus.className = 'status err';
+  }
+  E.btnSimulate.disabled = false;
+}
+
+async function onLoadControl() {
+  try {
+    const r = await fetch('/api/load-control', { method: 'POST' });
+    const res = await r.json();
+    if (!r.ok) throw new Error(res.error || 'load failed');
+    state.exp = await getJSON('/api/experiment');
+    state.selectedWell = null; state.compare = new Set(); state.channel = 0;
+    renderAll();
+    setStatus('已切换到对照组视图: ' + state.exp.name + '（' + Object.keys(state.exp.computed).length + ' 条曲线已分析）', 'ok');
+  } catch (e) {
+    setStatus('加载对照组失败: ' + e.message, 'err');
+  }
+}
+
+function renderCompare(comp) {
+  const fmt = (v, d) => (v === null || v === undefined || isNaN(v)) ? '—' : (Math.round(v * Math.pow(10, d || 2)) / Math.pow(10, d || 2)).toString();
+  const pText = comp.pairedT && comp.pairedT.p !== null && comp.pairedT.p !== undefined && !isNaN(comp.pairedT.p)
+    ? (comp.pairedT.p < 0.001 ? comp.pairedT.p.toExponential(2) : comp.pairedT.p.toFixed(4)) : '—';
+  const cards = [
+    ['配对阳性孔数 n', String(comp.n || 0)],
+    ['处理组 Cq 均值 ± SD', fmt(comp.treat.summary.mean) + ' ± ' + fmt(comp.treat.summary.sd)],
+    ['对照组 Cq 均值 ± SD', fmt(comp.ctrl.summary.mean) + ' ± ' + fmt(comp.ctrl.summary.sd)],
+    ['ΔCt (对照 − 处理)', fmt(comp.meanDeltaCt, 2)],
+    ['配对 t 检验', 'p = ' + pText + ' <span class="' + (comp.significant ? 'sig' : 'ns') + '">' + (comp.pairedT ? comp.pairedT.stars : '') + '</span>'],
+    ['Cohen\'s d（效应量）', fmt(comp.cohensD, 2)],
+    ['表达倍数变化', comp.foldLabel || '—'],
+    ['阳性率', '处理 ' + comp.positiveRate.treat + '<br>对照 ' + comp.positiveRate.ctrl + ' (p=' + fmt(comp.positiveRate.p, 3) + ')'],
+  ];
+  E.compareCards.innerHTML = cards.map(c =>
+    '<div class="ccard"><div class="k">' + c[0] + '</div><div class="v ' + (c[0].indexOf('p') >= 0 && comp.significant ? 'sig' : '') + '">' + c[1] + '</div></div>').join('');
+  E.compareVerdict.innerHTML = '<b>结论：</b>' + (comp.verdict || '');
+  drawCompareChart(E.compareCanvas, comp.treat.summary, comp.ctrl.summary, 'Cq 分布对比（均值 ± SD）');
+}
+
+function drawCompareChart(canvas, a, b, title) {
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth || 760;
+  const cssH = 240;
+  canvas.style.width = cssW + 'px'; canvas.style.height = cssH + 'px';
+  canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+  const pad = { l: 46, r: 16, t: 18, b: 30 };
+  const iw = cssW - pad.l - pad.r, ih = cssH - pad.t - pad.b;
+  const all = [a.mean - a.sd * 2, a.mean + a.sd * 2, b.mean - b.sd * 2, b.mean + b.sd * 2, a.min, a.max, b.min, b.max];
+  let lo = Math.min.apply(null, all), hi = Math.max.apply(null, all);
+  if (lo === hi) { lo -= 1; hi += 1; }
+  const sy = v => pad.t + ih - (v - lo) / (hi - lo) * ih;
+  // grid
+  ctx.strokeStyle = '#26304a'; ctx.fillStyle = '#6c82a6'; ctx.font = '11px sans-serif'; ctx.lineWidth = 1;
+  for (let i = 0; i <= 5; i++) {
+    const v = lo + (hi - lo) * i / 5, Y = sy(v);
+    ctx.beginPath(); ctx.moveTo(pad.l, Y); ctx.lineTo(pad.l + iw, Y); ctx.stroke();
+    ctx.textAlign = 'right'; ctx.fillText(Math.round(v * 100) / 100, pad.l - 6, Y + 4);
+  }
+  // two groups
+  const groups = [
+    { label: '处理组 Treatment', s: a, color: '#4da3ff', x: pad.l + iw * 0.25 },
+    { label: '对照组 Control', s: b, color: '#ff8d6b', x: pad.l + iw * 0.75 },
+  ];
+  groups.forEach(g => {
+    const s = g.s;
+    const barW = 44;
+    // mean ± SD bar
+    const mY = sy(s.mean), sdTop = sy(s.mean + s.sd), sdBot = sy(s.mean - s.sd);
+    ctx.strokeStyle = g.color; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(g.x - barW / 2, mY); ctx.lineTo(g.x + barW / 2, mY); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(g.x, sdTop); ctx.lineTo(g.x, sdBot); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(g.x - barW / 4, sdTop); ctx.lineTo(g.x + barW / 4, sdTop); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(g.x - barW / 4, sdBot); ctx.lineTo(g.x + barW / 4, sdBot); ctx.stroke();
+    // min/max whiskers
+    const minY = sy(s.min), maxY = sy(s.max);
+    ctx.strokeStyle = g.color; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(g.x, minY); ctx.lineTo(g.x, maxY); ctx.stroke();
+    // label
+    ctx.fillStyle = g.color; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(g.label, g.x, cssH - 8);
+    ctx.fillStyle = '#e6eefb';
+    ctx.fillText('mean ' + Math.round(s.mean * 100) / 100 + ' ± ' + Math.round(s.sd * 100) / 100, g.x, pad.t - 2);
+  });
+}
+
 // ---------------- init ----------------
 function init() {
   E.fileInput.addEventListener('change', e => {
@@ -362,6 +489,10 @@ function init() {
   });
   E.metricSelect.addEventListener('change', () => { state.metric = E.metricSelect.value; renderPlate(); renderLegend(); });
   E.channelSelect.addEventListener('change', () => { state.channel = parseInt(E.channelSelect.value, 10); renderPlate(); renderLegend(); renderChart(); renderDetail(); });
+  E.simDelta.addEventListener('input', () => { E.simDeltaLabel.textContent = E.simDelta.value; });
+  E.btnSimulate.addEventListener('click', onSimulate);
+  E.btnLoadControl.addEventListener('click', onLoadControl);
+  loadExperiments();
 
   // restore server-side state if any
   fetch('/api/status').then(r => r.json()).then(s => {

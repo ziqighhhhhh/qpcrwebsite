@@ -1,6 +1,7 @@
 {
   "port": 8080,
   "binDir": "G:\\202608147test\\LC96资料 96\\Bin",
+  "experimentsDir": "G:\\202608147test\\experiments",
   "adf": "Gen-KA.adf",
   "dataDir": "data"
 }

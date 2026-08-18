@@ -89,3 +89,19 @@ canvas#curveCanvas { width: 100%; height: auto; background: #10141f; border-radi
 .kv td:first-child { color: #8fa3c4; width: 220px; }
 .kv td:last-child { font-family: Consolas, monospace; color: #cfe3ff; }
 input[type=checkbox] { accent-color: #4da3ff; }
+/* ---- simulation panel ---- */
+.sim-panel { grid-area: sim; }
+main { grid-template-areas: "plate chart" "plate detail" "sim sim" "table table"; }
+.sim-controls { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; font-size: 13px; color: #9db4d8; }
+.sim-controls label { display: flex; align-items: center; gap: 8px; }
+.sim-controls input[type=range] { width: 140px; }
+.sim-status { margin-top: 8px; }
+.sim-result { margin-top: 14px; }
+.compare-cards { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.ccard { background: #1a2336; border: 1px solid #26304a; border-radius: 8px; padding: 10px 14px; min-width: 150px; }
+.ccard .k { font-size: 11px; color: #8fa3c4; }
+.ccard .v { font-size: 17px; font-weight: 700; color: #e6eefb; margin-top: 2px; }
+.ccard .v.sig { color: #7fe3a0; }
+.ccard .v.ns { color: #ffb454; }
+.verdict { margin-top: 8px; padding: 10px 14px; border-radius: 8px; background: #14203a; border: 1px solid #2a4a7a; color: #cfe3ff; font-size: 14px; line-height: 1.6; }
+canvas#compareCanvas { width: 100%; height: auto; background: #10141f; border-radius: 8px; margin-top: 6px; }
