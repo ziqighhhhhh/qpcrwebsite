@@ -53,9 +53,12 @@
   <section class="panel sim-panel">
     <h2>数据模拟 — 对照组生成 <span style="color:#5c7399;font-weight:400;font-size:12px">基于真实实验组生成"未处理/表达受抑"对照组，两组对比呈现显著差异（教学演示）</span></h2>
     <div class="sim-controls">
-      <label>实验组文件
-        <select id="simSource" class="select"></select>
+      <label>实验组来源（自由选择文件夹）
+        <button id="btnPickFolder" class="btn">选择文件夹…</button>
+        <input type="file" id="folderInput" webkitdirectory multiple hidden>
+        <select id="simSource" class="select" style="min-width:260px"></select>
       </label>
+      <span id="currentTreat" class="status"></span>
       <label>效应强度 ΔCt（对照组扩增滞后循环数）
         <input type="range" id="simDelta" min="3" max="12" step="1" value="8">
         <span id="simDeltaLabel">8</span>

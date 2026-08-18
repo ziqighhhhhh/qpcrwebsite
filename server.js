@@ -32,6 +32,7 @@ let experiment = null;
 let expFile = null;
 let controlExperiment = null;   // simulated control group (if generated)
 let controlFile = null;
+let sourceZipCache = null;      // raw bytes of the current treatment .lc96p (for building control file)
 
 function saveExperiment() {
   if (!experiment) return;
@@ -180,22 +181,18 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'POST' && p === '/api/simulate') {
       try {
+        if (!experiment) { sendJson(res, 404, { error: 'no experiment loaded — pick a treatment file first' }); return; }
         const body = await readBody(req, 1 * 1024 * 1024);
         const opts = JSON.parse(body.toString('utf8').replace(/^\uFEFF/, ''));
-        const sourceName = opts.source;
-        if (!sourceName || /\.\./.test(sourceName)) { sendJson(res, 400, { error: 'invalid source' }); return; }
-        const srcPath = path.join(experimentsDir, sourceName);
-        if (!fs.existsSync(srcPath)) { sendJson(res, 404, { error: 'source not found' }); return; }
         const deltaCt = Math.min(15, Math.max(1, parseInt(opts.deltaCt, 10) || 8));
-        const buf = fs.readFileSync(srcPath);
-        const treat = parseLc96p(buf, sourceName);
+        const treat = experiment;
         if (!Object.keys(treat.computed || {}).length) {
           await engine.analyzeExperiment(treat); // ensure treatment group is analyzed
         }
         const ctrl = sim.buildControl(treat, { deltaCt });
         await engine.analyzeExperiment(ctrl);    // run the real engine on the control group
         controlExperiment = ctrl;
-        const ctrlBytes = sim.toLc96p(ctrl, readZip(buf));
+        const ctrlBytes = sim.toLc96p(ctrl, sourceZipCache ? readZip(sourceZipCache) : null);
         controlFile = path.join(controlsDir, ctrl.name.replace(/[^\w.\-]/g, '_'));
         fs.writeFileSync(controlFile, ctrlBytes);
         const comp = compareGroups(treat, ctrl, ctrl.wells.length);
@@ -207,6 +204,24 @@ const server = http.createServer(async (req, res) => {
         });
       } catch (e) {
         sendJson(res, 500, { error: 'simulate failed: ' + e.message });
+      }
+      return;
+    }
+    if (req.method === 'POST' && p === '/api/load-from') {
+      try {
+        const body = await readBody(req, 1 * 1024 * 1024);
+        const opts = JSON.parse(body.toString('utf8').replace(/^\uFEFF/, ''));
+        const sourceName = opts.source;
+        if (!sourceName || /\.\./.test(sourceName)) { sendJson(res, 400, { error: 'invalid source' }); return; }
+        const srcPath = path.join(experimentsDir, sourceName);
+        if (!fs.existsSync(srcPath)) { sendJson(res, 404, { error: 'source not found' }); return; }
+        const buf = fs.readFileSync(srcPath);
+        experiment = parseLc96p(buf, sourceName);
+        sourceZipCache = buf;
+        saveExperiment();
+        sendJson(res, 200, { ok: true, experiment: summary() });
+      } catch (e) {
+        sendJson(res, 500, { error: 'load failed: ' + e.message });
       }
       return;
     }
@@ -240,6 +255,10 @@ const server = http.createServer(async (req, res) => {
       const name = url.searchParams.get('name') || 'upload.lc96p';
       try {
         experiment = parseLc96p(body, name);
+        sourceZipCache = body; // keep raw bytes for control-group packaging
+        const rawDir = path.join(dataDir, 'raw');
+        if (!fs.existsSync(rawDir)) fs.mkdirSync(rawDir, { recursive: true });
+        fs.writeFileSync(path.join(rawDir, experiment.id + '.lc96p'), body);
         saveExperiment();
         sendJson(res, 200, { ok: true, experiment: summary() });
       } catch (e) {

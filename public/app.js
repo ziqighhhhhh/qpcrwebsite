@@ -20,6 +20,7 @@ const E = {
   detailTitle: $('detailTitle'), detailTable: $('detailTable'), resultTable: $('resultTable'),
   tableTitle: $('tableTitle'),
   simSource: $('simSource'), simDelta: $('simDelta'), simDeltaLabel: $('simDeltaLabel'),
+  btnPickFolder: $('btnPickFolder'), folderInput: $('folderInput'), currentTreat: $('currentTreat'),
   btnSimulate: $('btnSimulate'), btnLoadControl: $('btnLoadControl'),
   btnDownloadControl: $('btnDownloadControl'), simStatus: $('simStatus'),
   simResult: $('simResult'), compareCards: $('compareCards'),
@@ -348,24 +349,73 @@ function renderAll() {
 
 // ---------------- simulation ----------------
 let simData = null; // last simulate response
+let customFiles = {}; // custom folder .lc96p files: name -> File
 
 async function loadExperiments() {
   try {
     const r = await fetch('/api/experiments');
     const res = await r.json();
     if (!res.ok || !res.files) return;
-    E.simSource.innerHTML = res.files.map(f =>
-      '<option value="' + f.name.replace(/"/g, '&quot;') + '">' + f.name + ' (' + Math.round(f.size / 1024) + ' KB)</option>').join('');
-    // preselect current experiment name if present
+    renderSourceOptions(res.files.map(f => f.name));
     if (state.exp && state.exp.name) E.simSource.value = state.exp.name;
   } catch (e) { /* server may not have experimentsDir */ }
+}
+
+function renderSourceOptions(serverFiles) {
+  const custom = Object.keys(customFiles);
+  let html = '<optgroup label="实验目录">';
+  html += (serverFiles || []).map(f =>
+    '<option value="' + escAttr('dir:' + f) + '">' + f + '</option>').join('');
+  html += '</optgroup>';
+  if (custom.length) {
+    html += '<optgroup label="自定义文件夹">';
+    html += custom.map(f => '<option value="' + escAttr('custom:' + f) + '">📁 ' + f + '</option>').join('');
+    html += '</optgroup>';
+  }
+  E.simSource.innerHTML = html;
+}
+
+function escAttr(s) { return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
+
+// load the picked treatment file as the current experiment (single source of truth)
+async function onPickTreatment(value) {
+  if (!value) return;
+  try {
+    if (value.startsWith('custom:')) {
+      const name = value.slice('custom:'.length);
+      const file = customFiles[name];
+      if (!file) throw new Error('file not found');
+      await onUpload(file); // uploads and renders as current experiment
+    } else if (value.startsWith('dir:')) {
+      const name = value.slice('dir:'.length);
+      const r = await fetch('/api/load-from', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: name }),
+      });
+      const res = await r.json();
+      if (!r.ok) throw new Error(res.error || 'load failed');
+      state.exp = await getJSON('/api/experiment');
+      state.selectedWell = null; state.compare = new Set(); state.channel = 0;
+      renderAll();
+      setStatus('实验组已加载: ' + state.exp.name + ' — 点击「生成对照组」', 'ok');
+    }
+    renderCurrentTreat();
+  } catch (e) {
+    setStatus('加载实验组失败: ' + e.message, 'err');
+  }
+}
+
+function renderCurrentTreat() {
+  E.currentTreat.textContent = state.exp
+    ? '当前实验组: ' + state.exp.name + (state.exp.analyzedAt ? '（已分析）' : '')
+    : '未加载实验组';
 }
 
 async function onSimulate() {
   E.btnSimulate.disabled = true;
   E.simStatus.textContent = '正在生成对照组并调用原引擎分析两组（约 2-5 秒）…';
   try {
-    const body = JSON.stringify({ source: E.simSource.value, deltaCt: parseInt(E.simDelta.value, 10) });
+    const body = JSON.stringify({ deltaCt: parseInt(E.simDelta.value, 10) });
     const r = await fetch('/api/simulate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
     const res = await r.json();
     if (!r.ok) throw new Error(res.error || 'simulate failed');
@@ -492,7 +542,28 @@ function init() {
   E.simDelta.addEventListener('input', () => { E.simDeltaLabel.textContent = E.simDelta.value; });
   E.btnSimulate.addEventListener('click', onSimulate);
   E.btnLoadControl.addEventListener('click', onLoadControl);
+  E.btnPickFolder.addEventListener('click', () => E.folderInput.click());
+  E.folderInput.addEventListener('change', e => {
+    const files = Array.from(e.target.files || []);
+    const lc96 = files.filter(f => /\.lc96p$/i.test(f.name));
+    customFiles = {};
+    lc96.forEach(f => { customFiles[f.name] = f; });
+    renderSourceOptions([]); // rebuild dropdown: keeps previous server list? -> refetch to keep list
+    loadExperiments();
+    if (lc96.length) {
+      E.simSource.value = 'custom:' + lc96[0].name;
+      onPickTreatment(E.simSource.value);
+      E.simStatus.textContent = '已从自定义文件夹载入 ' + lc96.length + ' 个 .lc96p';
+      E.simStatus.className = 'status ok';
+    } else {
+      E.simStatus.textContent = '所选文件夹中没有 .lc96p 文件';
+      E.simStatus.className = 'status err';
+    }
+    e.target.value = '';
+  });
+  E.simSource.addEventListener('change', () => onPickTreatment(E.simSource.value));
   loadExperiments();
+  renderCurrentTreat();
 
   // restore server-side state if any
   fetch('/api/status').then(r => r.json()).then(s => {
