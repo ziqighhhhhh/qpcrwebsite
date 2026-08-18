@@ -1,0 +1,68 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>qPCR Web — LightCycler 96 定性分析</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="brand">qPCR <span>Web</span></div>
+  <div class="controls">
+    <label class="btn upload"><input type="file" id="fileInput" accept=".lc96p,.zip" hidden>上传 .lc96p</label>
+    <button id="btnAnalyze" class="btn primary" disabled>Analyze</button>
+    <select id="metricSelect" class="select" title="热图指标">
+      <option value="Call">指标: Call</option>
+      <option value="Cq">指标: Cq</option>
+      <option value="Slope">指标: Slope</option>
+      <option value="EPF">指标: EPF</option>
+    </select>
+    <select id="channelSelect" class="select" title="通道"></select>
+    <span class="spacer"></span>
+    <div class="dropdown">
+      <button class="btn" id="btnExport" disabled>导出 ▾</button>
+      <div class="dropdown-menu" id="exportMenu">
+        <a href="#" data-format="csv">CSV</a>
+        <a href="#" data-format="json">JSON</a>
+        <a href="#" data-format="xlsx">Excel (XLSX)</a>
+      </div>
+    </div>
+  </div>
+  <div id="status" class="status">未加载实验 — 请上传 .lc96p 文件</div>
+</header>
+
+<main>
+  <section class="panel plate-panel">
+    <h2>96 孔板 <span id="plateTitle"></span></h2>
+    <div id="plate" class="plate"></div>
+    <div class="legend" id="legend"></div>
+  </section>
+
+  <section class="panel chart-panel">
+    <h2>扩增曲线 <span id="chartTitle"></span></h2>
+    <canvas id="curveCanvas" width="760" height="360"></canvas>
+    <div class="chart-legend" id="chartLegend"></div>
+  </section>
+
+  <section class="panel detail-panel">
+    <h2>孔参数 <span id="detailTitle"></span></h2>
+    <table id="detailTable" class="table kv"><tbody></tbody></table>
+  </section>
+
+  <section class="panel table-panel">
+    <h2>结果表 <span id="tableTitle"></span></h2>
+    <div class="table-wrap">
+      <table class="table" id="resultTable">
+        <thead></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="hint">点击表头排序；勾选 ☐ 将孔加入曲线对比</div>
+  </section>
+</main>
+
+<script src="/static/chart.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

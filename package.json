@@ -1,0 +1,12 @@
+﻿{
+  "name": "qpcrwebsite",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Web frontend + backend for Roche LightCycler 96 qualitative PCR data, powered by the original x86 Kinetic engine via a JSON bridge.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "build-bridge": "bridge\\build.bat"
+  },
+  "engines": { "node": ">=16" }
+}
