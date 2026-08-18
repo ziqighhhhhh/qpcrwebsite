@@ -23,19 +23,23 @@
 - Node.js ≥ 16
 - 罗氏 LightCycler 96 软件目录（含 `Bin`、`Gen-KA.adf`、`AlgorithmLibraries\Kinetic\...`）
 
-### 运行
+### 运行（一键）
 
 ```bat
 :: 1) 配置 config.json 中的 binDir 指向你的 LC96 软件 Bin 目录
-:: 2) 编译 x86 Bridge（首次）
-bridge\build.bat
-:: 3) 启动
-node server.js
+:: 2) 双击 start.bat —— 自动检查 Node、自动编译缺失的 x86 Bridge、启动服务器、打开浏览器
+start.bat
 ```
 
-打开浏览器访问 `http://localhost:8080`，上传 `.lc96p`（如 DemoData 目录中的演示文件）→ Analyze → 查看结果 → 导出。
+打开浏览器（或由 start.bat 自动打开）访问 `http://localhost:8080`，上传 `.lc96p`（如 DemoData 目录中的演示文件）→ Analyze → 查看结果 → 导出。
 
-服务器启动时会自动把 `engine-bridge.exe` 复制到 `binDir` 并在缺省时尝试编译。
+`start.bat` 会：
+- 检查 Node.js 是否安装
+- 若 `bridge\engine-bridge.exe` 缺失则自动调用 `bridge\build.bat` 编译（build.bat 从 config.json 自动读取 binDir，换机器只需改 config.json）
+- 启动服务器并在 2 秒后自动打开浏览器
+- 服务器重启后自动恢复上次实验（data/ 目录持久化）
+
+手动方式：`bridge\build.bat` 编译 + `node server.js` 启动。
 
 ## 架构
 
@@ -100,6 +104,7 @@ node server.js
 
 ```
 qpcrwebsite/
+├── start.bat         # 一键启动（检查/编译/启动/开浏览器）
 ├── server.js          # 零依赖 HTTP 服务器 + API
 ├── config.json        # port / binDir / adf
 ├── bridge/
