@@ -242,6 +242,11 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, { ok: true, experiment: summary() });
       return;
     }
+    if (req.method === 'GET' && p === '/api/control/experiment') {
+      if (!controlExperiment) { sendJson(res, 404, { error: 'no control experiment (run /api/simulate first)' }); return; }
+      sendJson(res, 200, controlExperiment);
+      return;
+    }
     if (req.method === 'GET' && p === '/api/control') {
       if (!controlFile || !fs.existsSync(controlFile)) { sendJson(res, 404, { error: 'no control file' }); return; }
       const name = path.basename(controlFile);

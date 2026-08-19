@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>qPCR Web — LightCycler 96 定性分析</title>
+<title>qPCR Web — LightCycler 96 定性分析（原始 vs 对照组）</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -20,6 +20,9 @@
     </select>
     <select id="channelSelect" class="select" title="通道"></select>
     <span class="spacer"></span>
+    <label class="sim-inline">对照组 ΔCt <input type="range" id="simDelta" min="3" max="12" step="1" value="8" title="对照组扩增滞后循环数"><span id="simDeltaLabel">8</span></label>
+    <button id="btnSimulate" class="btn primary" disabled>生成对照组</button>
+    <a id="btnDownloadControl" class="btn" href="#" download disabled>下载对照组 .lc96p</a>
     <div class="dropdown">
       <button class="btn" id="btnExport" disabled>导出 ▾</button>
       <div class="dropdown-menu" id="exportMenu">
@@ -32,57 +35,57 @@
   <div id="status" class="status">未加载实验 — 请上传 .lc96p 文件</div>
 </header>
 
-<main>
-  <section class="panel plate-panel">
-    <h2>96 孔板 <span id="plateTitle"></span> <span id="adfInfo" style="color:#5c7399;font-weight:400;font-size:12px"></span></h2>
-    <div id="plate" class="plate"></div>
-    <div class="legend" id="legend"></div>
-  </section>
+<section class="sim-summary" id="simResult" hidden>
+  <div class="compare-cards" id="compareCards"></div>
+  <div id="compareVerdict" class="verdict"></div>
+</section>
 
-  <section class="panel chart-panel">
-    <h2>扩增曲线 <span id="chartTitle"></span></h2>
-    <canvas id="curveCanvas" width="760" height="360"></canvas>
-    <div class="chart-legend" id="chartLegend"></div>
-  </section>
+<main class="duo">
+  <div class="col">
+    <div class="col-head">原始数据（实验组）<span id="leftTitle" class="col-sub"></span></div>
+    <section class="panel">
+      <h2>1 · Amplification Curves ｜ 扩增曲线 <span id="leftCurveTitle"></span></h2>
+      <canvas id="leftCurve" width="720" height="300"></canvas>
+      <div class="chart-legend" id="leftCurveLegend"></div>
+    </section>
+    <section class="panel">
+      <h2>2 · Combined Call Heat Map ｜ 综合判定热图 <span class="col-sub"></span></h2>
+      <div id="leftCombined" class="plate plate-sm"></div>
+    </section>
+    <section class="panel">
+      <h2>3 · Heat Map ｜ 孔板结果热图 <span id="leftHeatTitle" class="col-sub"></span></h2>
+      <div id="leftHeat" class="plate plate-sm"></div>
+      <div class="legend" id="leftLegend"></div>
+    </section>
+    <section class="panel">
+      <h2>4 · Result Table ｜ 结果明细表</h2>
+      <div class="table-wrap short"><table class="table" id="leftTable"><thead></thead><tbody></tbody></table></div>
+      <div class="hint">点击表头排序；勾选 ☐ 将孔加入曲线对比（左右联动）</div>
+    </section>
+  </div>
 
-  <section class="panel detail-panel">
-    <h2>孔参数 <span id="detailTitle"></span></h2>
-    <table id="detailTable" class="table kv"><tbody></tbody></table>
-  </section>
-
-  <section class="panel sim-panel">
-    <h2>数据模拟 — 对照组生成 <span style="color:#5c7399;font-weight:400;font-size:12px">实验组 = 当前已上传并分析的数据；对照组自动生成，无需重复选数据</span></h2>
-    <div class="sim-controls">
-      <span class="status" id="currentTreat"></span>
-      <label>效应强度 ΔCt（对照组扩增滞后循环数）
-        <input type="range" id="simDelta" min="3" max="12" step="1" value="8">
-        <span id="simDeltaLabel">8</span>
-      </label>
-      <button id="btnSimulate" class="btn primary">基于当前实验生成对照组</button>
-      <button id="btnLoadControl" class="btn" disabled>加载对照组到当前视图</button>
-      <a id="btnDownloadControl" class="btn" href="#" download disabled>下载对照组 .lc96p</a>
-      <span id="simStatus" class="status"></span>
-    </div>
-    <div class="hint" style="margin-top:8px;font-size:12px;color:#5c7399">
-      流程：上传 .lc96p → Analyze → 生成对照组（阳性孔曲线右移 ΔCt、阴性孔保持无扩增）→ 两组统计对比 → 导出对照组文件。对照组可加载到当前视图查看 96 孔板/曲线，或下载后用于其他分析。
-    </div>
-    <div id="simResult" class="sim-result" hidden>
-      <div class="compare-cards" id="compareCards"></div>
-      <canvas id="compareCanvas" width="760" height="240"></canvas>
-      <div id="compareVerdict" class="verdict"></div>
-    </div>
-  </section>
-
-  <section class="panel table-panel">
-    <h2>结果表 <span id="tableTitle"></span></h2>
-    <div class="table-wrap">
-      <table class="table" id="resultTable">
-        <thead></thead>
-        <tbody></tbody>
-      </table>
-    </div>
-    <div class="hint">点击表头排序；勾选 ☐ 将孔加入曲线对比</div>
-  </section>
+  <div class="col">
+    <div class="col-head">对照组（模拟生成）<span id="rightTitle" class="col-sub"></span></div>
+    <section class="panel">
+      <h2>1 · Amplification Curves ｜ 扩增曲线 <span id="rightCurveTitle"></span></h2>
+      <canvas id="rightCurve" width="720" height="300"></canvas>
+      <div class="chart-legend" id="rightCurveLegend"></div>
+    </section>
+    <section class="panel">
+      <h2>2 · Combined Call Heat Map ｜ 综合判定热图 <span class="col-sub"></span></h2>
+      <div id="rightCombined" class="plate plate-sm"></div>
+    </section>
+    <section class="panel">
+      <h2>3 · Heat Map ｜ 孔板结果热图 <span id="rightHeatTitle" class="col-sub"></span></h2>
+      <div id="rightHeat" class="plate plate-sm"></div>
+      <div class="legend" id="rightLegend"></div>
+    </section>
+    <section class="panel">
+      <h2>4 · Result Table ｜ 结果明细表</h2>
+      <div class="table-wrap short"><table class="table" id="rightTable"><thead></thead><tbody></tbody></table></div>
+      <div class="hint">点击表头排序；勾选 ☐ 将孔加入曲线对比（左右联动）</div>
+    </section>
+  </div>
 </main>
 
 <script src="/static/chart.js"></script>

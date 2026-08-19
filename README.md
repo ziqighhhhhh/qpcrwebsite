@@ -9,6 +9,11 @@
 
 - 上传 `.lc96p`（LightCycler 96 实验文件，ZIP 内包含 RDML 荧光数据）
 - 一键 **Analyze**：调用原版 Kinetic 引擎计算每孔×通道的 Cq / Slope / EPF / 判定等 40+ 参数
+- **左右对称双视图**（原始数据 vs 对照组），每侧 4 区与原软件 QualDetection 布局一致：
+  1. Amplification Curves ｜ 扩增曲线（选中孔 + 多孔对比，左右联动）
+  2. Combined Call Heat Map ｜ 综合判定热图
+  3. Heat Map ｜ 孔板结果热图（Call / Cq / Slope / EPF 着色）
+  4. Result Table ｜ 结果明细表（排序、勾选对比）
 - **96 孔板热图**：按 Call / Cq / Slope / EPF 着色，点击孔位查看详情
 - **扩增曲线**：选中孔 + 多孔对比叠加，曲线与 Cq 标记
 - **通道切换**：FAM / Yellow555 等（由文件自动识别）
