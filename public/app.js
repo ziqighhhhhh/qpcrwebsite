@@ -277,12 +277,7 @@ function renderMelt(side, exp) {
   const legendEl = side === 'left' ? E.leftMeltLegend : E.rightMeltLegend;
   const dye = exp.dyes[state.channel] || exp.dyes[0];
   if (!exp.melt || !Object.keys(exp.melt).length) {
-    drawLineChart(canvas, [], { xLabel: 'Temperature (°C)', yLabel: 'Fluorescence' });
-    canvas.getContext('2d'); // noop touch
-    const ctx = canvas.getContext('2d');
-    const w = canvas.width / (window.devicePixelRatio || 1);
-    ctx.fillStyle = '#5c7399'; ctx.font = '13px sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText(side === 'right' ? '对照组为模拟扩增数据（无熔解采集）' : '无熔解数据', w / 2, 100);
+    drawLineChart(canvas, [], { xLabel: 'Temperature (°C)', yLabel: 'Fluorescence', emptyText: side === 'right' ? '对照组为模拟数据（熔解形态沿用实验组）' : '无熔解数据' });
     legendEl.innerHTML = '';
     return;
   }

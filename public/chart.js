@@ -25,7 +25,7 @@ function drawLineChart(canvas, series, opts) {
   series.forEach(s => (s.points || []).forEach(p => { if (isFinite(p.x) && isFinite(p.y)) all.push(p); }));
   if (!all.length) {
     ctx.fillStyle = '#5c7399'; ctx.font = '13px sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText('无数据 — 请选择孔位', cssW / 2, cssH / 2);
+    ctx.fillText(opts.emptyText || '无数据 — 请选择孔位', cssW / 2, cssH / 2);
     return;
   }
   let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
