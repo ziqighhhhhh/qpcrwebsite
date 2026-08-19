@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 // ============================================================================
 // qPCR Web — zero-dependency Node server.
 // Single source of truth: the Experiment model (one JSON object in memory,
@@ -19,6 +19,7 @@ const { parseLc96p } = require('./lib/lc96p.js');
 const { toCSV, toJSON, toXLSX } = require('./lib/export.js');
 const { readZip } = require('./lib/zip.js');
 const sim = require('./lib/simulate.js');
+const syn = require('./lib/synthesize.js');
 const { compareGroups } = require('./lib/compare.js');
 const engine = require('./lib/engine.js');
 engine.configure({ binDir: config.binDir, projectDir, adf: config.adf || 'Gen-KA.adf' });
@@ -256,6 +257,34 @@ const server = http.createServer(async (req, res) => {
         'Content-Disposition': 'attachment; filename="' + name + '"',
       });
       res.end(data);
+      return;
+    }
+    if (req.method === 'POST' && p === '/api/synthesize') {
+      try {
+        const body = await readBody(req, 256 * 1024);
+        const opts = JSON.parse(body.toString('utf8').replace(/^\uFEFF/, ''));
+        // student-simulated experiment: from-scratch synthesis, then the REAL pipeline
+        const synthExp = syn.synthesize(opts);
+        const bytes = syn.toLc96p(synthExp);
+        // push through the real upload path (parse back from bytes, then real engine)
+        experiment = parseLc96p(bytes, synthExp.name);
+        sourceZipCache = bytes;
+        const rawDir = path.join(dataDir, 'raw');
+        if (!fs.existsSync(rawDir)) fs.mkdirSync(rawDir, { recursive: true });
+        fs.writeFileSync(path.join(rawDir, experiment.id + '.lc96p'), bytes);
+        await engine.analyzeExperiment(experiment);
+        saveExperiment();
+        controlExperiment = null; controlFile = null; // stale simulated control no longer applies
+        sendJson(res, 200, {
+          ok: true,
+          experiment: summary(),
+          params: synthExp.analysis.synthetic.params,
+          note: synthExp.analysis.synthetic.note,
+          limits: syn.PARAM_LIMITS,
+        });
+      } catch (e) {
+        sendJson(res, 500, { error: 'synthesize failed: ' + e.message });
+      }
       return;
     }
     if (req.method === 'POST' && p === '/api/upload') {

@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -23,6 +23,7 @@
     <label class="sim-inline">对照组 ΔCt <input type="range" id="simDelta" min="3" max="12" step="1" value="8" title="对照组扩增滞后循环数"><span id="simDeltaLabel">8</span></label>
     <button id="btnSimulate" class="btn primary" disabled>生成对照组</button>
     <a id="btnDownloadControl" class="btn" href="#" download disabled>下载对照组 .lc96p</a>
+    <button id="btnSynth" class="btn accent" title="从零合成一套模拟实验数据（学生练习用），参数带合理范围校验">学生模拟实验</button>
     <div class="dropdown">
       <button class="btn" id="btnExport" disabled>导出 ▾</button>
       <div class="dropdown-menu" id="exportMenu">
@@ -113,6 +114,58 @@
     </section>
   </div>
 </main>
+
+<!-- 学生模拟实验：参数面板 -->
+<div class="modal-overlay" id="synModal" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <h2>学生模拟实验 — 参数设计</h2>
+      <button class="btn" id="synClose" title="关闭">✕</button>
+    </div>
+    <p class="hint">输入数据为按参数<b>从零合成</b>的模拟数据；上传后由<b>原版 Roche Kinetic 引擎</b>按真实流程分析（Cq / Slope / EPF / Call 与原软件一致）。参数均带合理范围校验，超出范围会提示。</p>
+    <div class="syn-grid">
+      <fieldset>
+        <legend>实验设计</legend>
+        <label>组别数 <input type="number" id="synGroups" min="2" max="4" step="1" value="2"><span class="range">2–4</span></label>
+        <label>每组样本数 <input type="number" id="synSamples" min="1" max="8" step="1" value="3"><span class="range">1–8</span></label>
+        <label>复孔数 <input type="number" id="synReps" min="1" max="3" step="1" value="3"><span class="range">1–3</span></label>
+        <label class="chk"><input type="checkbox" id="synNtc" checked> 含 NTC 无模板对照（2 孔）</label>
+        <label class="chk"><input type="checkbox" id="synIc"> 含内参通道 Yellow555（每样本 1 条）</label>
+        <label class="chk"><input type="checkbox" id="synPos"> 含阳性对照（2 孔，Cq≈基线−6）</label>
+      </fieldset>
+      <fieldset>
+        <legend>生物学</legend>
+        <label>表达倍数（处理 vs 对照） <input type="number" id="synFold" min="1.5" max="20" step="0.5" value="4"><span class="range">1.5–20</span></label>
+        <label>表达方向 <select id="synDirection"><option value="up" selected>上调（Cq 更低）</option><option value="down">下调（Cq 更高）</option></select></label>
+        <label>组内生物学 CV % <input type="number" id="synBioCv" min="5" max="40" step="1" value="15"><span class="range">5–40%</span></label>
+      </fieldset>
+      <fieldset>
+        <legend>技术</legend>
+        <label>复孔间 SD (Cq) <input type="number" id="synTechSd" min="0.05" max="1" step="0.05" value="0.2"><span class="range">0.05–1.0</span></label>
+        <label>扩增效率 % <input type="number" id="synEff" min="80" max="115" step="1" value="95"><span class="range">80–115%</span></label>
+        <label>对照组基线 Cq <input type="number" id="synCtBase" min="15" max="30" step="1" value="20"><span class="range">15–30</span></label>
+        <label>基线噪声 <select id="synNoise"><option value="1">低</option><option value="2" selected>中</option><option value="3">高</option></select></label>
+      </fieldset>
+      <fieldset>
+        <legend>特异性 / 复现</legend>
+        <label>熔解峰 <select id="synMelt"><option value="1" selected>单峰（特异性）</option><option value="2">双峰（含引物二聚体）</option></select></label>
+        <label>随机种子 <input type="number" id="synSeed" step="1" placeholder="留空=随机" title="相同种子可复现同一套数据"><span class="range">可选</span></label>
+        <div class="syn-total" id="synTotal">总孔数：18 + NTC 2 = 20</div>
+      </fieldset>
+    </div>
+    <div class="modal-foot">
+      <div class="syn-issues" id="synIssues"></div>
+      <button class="btn primary" id="synGo">生成模拟实验并分析</button>
+    </div>
+  </div>
+</div>
+
+<!-- QC 报告（合成/分析后自动生成） -->
+<section class="sim-summary" id="qcReport" hidden>
+  <h2>QC 报告（合成数据经原引擎分析后）</h2>
+  <div class="compare-cards" id="qcCards"></div>
+  <div id="qcVerdict" class="verdict"></div>
+</section>
 
 <script src="/static/chart.js"></script>
 <script src="/static/app.js"></script>

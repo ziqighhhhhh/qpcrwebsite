@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 // ---------------------------------------------------------------------------
 // qPCR Web — duo layout: left = original (treatment), right = simulated control.
 // Each side has the 4 original-software views: Amplification Curves,
@@ -33,6 +33,14 @@ const E = {
   ddctTable: $('ddctTable'), btnDdctCsv: $('btnDdctCsv'),
   leftMelt: $('leftMelt'), leftMeltLegend: $('leftMeltLegend'),
   rightMelt: $('rightMelt'), rightMeltLegend: $('rightMeltLegend'),
+  btnSynth: $('btnSynth'), synModal: $('synModal'), synClose: $('synClose'),
+  synGroups: $('synGroups'), synSamples: $('synSamples'), synReps: $('synReps'),
+  synNtc: $('synNtc'), synIc: $('synIc'), synPos: $('synPos'),
+  synFold: $('synFold'), synDirection: $('synDirection'), synBioCv: $('synBioCv'),
+  synTechSd: $('synTechSd'), synEff: $('synEff'), synCtBase: $('synCtBase'), synNoise: $('synNoise'),
+  synMelt: $('synMelt'), synSeed: $('synSeed'),
+  synTotal: $('synTotal'), synIssues: $('synIssues'), synGo: $('synGo'),
+  qcReport: $('qcReport'), qcCards: $('qcCards'), qcVerdict: $('qcVerdict'),
 };
 
 // ---------------- api ----------------
@@ -400,6 +408,210 @@ async function onSimulate() {
   E.btnSimulate.disabled = false;
 }
 
+// ---------------- student simulation (synthetic experiment) ----------------
+const SYN_LIMITS = {
+  groups: { min: 2, max: 4 }, samplesPerGroup: { min: 1, max: 8 }, replicates: { min: 1, max: 3 },
+  foldChange: { min: 1.5, max: 20 }, bioCv: { min: 5, max: 40 }, techSd: { min: 0.05, max: 1.0 },
+  efficiency: { min: 80, max: 115 }, ctBase: { min: 15, max: 30 }, noiseLevel: { min: 1, max: 3 },
+  meltPeaks: { min: 1, max: 2 },
+};
+const SYN_FIELDS = [
+  { id: 'synGroups', key: 'groups' }, { id: 'synSamples', key: 'samplesPerGroup' }, { id: 'synReps', key: 'replicates' },
+  { id: 'synFold', key: 'foldChange' }, { id: 'synBioCv', key: 'bioCv' }, { id: 'synTechSd', key: 'techSd' },
+  { id: 'synEff', key: 'efficiency' }, { id: 'synCtBase', key: 'ctBase' },
+];
+
+function synValidate() {
+  const issues = [];
+  for (const f of SYN_FIELDS) {
+    const el = E[f.id], L = SYN_LIMITS[f.key];
+    const v = parseFloat(el.value);
+    const bad = isNaN(v) || v < L.min || v > L.max;
+    el.classList.toggle('invalid', bad);
+    if (bad) issues.push(f.id.replace('syn', '') + ' 需在 [' + L.min + ', ' + L.max + '] 内');
+  }
+  const g = parseInt(E.synGroups.value, 10) || 2, s = parseInt(E.synSamples.value, 10) || 1, r = parseInt(E.synReps.value, 10) || 1;
+  const ntc = E.synNtc.checked ? 2 : 0, pos = E.synPos.checked ? 2 : 0;
+  const total = g * s * r + ntc + pos;
+  E.synTotal.textContent = '总孔数：' + (g * s * r) + (ntc ? ' + NTC ' + ntc : '') + (pos ? ' + 阳性对照 ' + pos : '') + ' = ' + total + (total > 96 ? '（超限！）' : '');
+  if (total > 96) issues.push('总孔数 ' + total + ' 超过 96 孔');
+  E.synIssues.textContent = issues.join('；');
+  E.synGo.disabled = issues.length > 0;
+  return issues.length === 0;
+}
+
+function synOpen() {
+  E.synModal.hidden = false;
+  synValidate();
+}
+function synClose() { E.synModal.hidden = true; }
+
+async function onSynthesize() {
+  if (!synValidate()) { setStatus('参数越界，无法生成', 'err'); return; }
+  const payload = {
+    groups: parseInt(E.synGroups.value, 10),
+    samplesPerGroup: parseInt(E.synSamples.value, 10),
+    replicates: parseInt(E.synReps.value, 10),
+    foldChange: parseFloat(E.synFold.value),
+    direction: E.synDirection.value,
+    bioCv: parseFloat(E.synBioCv.value),
+    techSd: parseFloat(E.synTechSd.value),
+    efficiency: parseFloat(E.synEff.value),
+    ctBase: parseFloat(E.synCtBase.value),
+    noiseLevel: parseInt(E.synNoise.value, 10),
+    meltPeaks: parseInt(E.synMelt.value, 10),
+    includeNtc: E.synNtc.checked,
+    includeIc: E.synIc.checked,
+    includePos: E.synPos.checked,
+  };
+  const seed = E.synSeed.value.trim();
+  if (seed !== '' && !isNaN(parseInt(seed, 10))) payload.seed = parseInt(seed, 10);
+  E.synGo.disabled = true;
+  setStatus('正在合成模拟实验并调用原引擎分析（约 5-15 秒）…');
+  try {
+    const r = await fetch('/api/synthesize', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const res = await r.json();
+    if (!r.ok) throw new Error(res.error || 'synthesize failed');
+    state.left = await getJSON('/api/experiment');
+    state.right = null;
+    state.selectedWell = null; state.compare = new Set(); state.channel = 0;
+    renderAll();
+    E.btnAnalyze.disabled = false;
+    E.btnSimulate.disabled = false;
+    E.btnExport.disabled = false;
+    E.simResult.hidden = true;
+    renderQC(state.left, res.params);
+    E.qcReport.hidden = false;
+    synClose();
+    setStatus('模拟实验已生成并完成真实引擎分析：' + state.left.curves.length + ' 条曲线（' + state.left.dyes.join(' + ') + '）— 左侧视图已更新，QC 报告见下方', 'ok');
+  } catch (e) {
+    setStatus('生成失败: ' + e.message, 'err');
+    E.synGo.disabled = false;
+  }
+}
+
+// QC report: replicate SD, NTC, IC stability, group significance
+function renderQC(exp, params) {
+  const cards = [];
+  const ok = (v) => '<span class="v sig">' + v + '</span>';
+  const warn = (v) => '<span class="v" style="color:#ffcc33">' + v + '</span>';
+  const bad = (v) => '<span class="v" style="color:#ff7a7a">' + v + '</span>';
+  const cqOf = (w, dye) => {
+    const c = exp.computed[w + '|' + dye];
+    return c && c['11 Intermediate Call'] === 'Positive' ? c['26 CT1'] : null;
+  };
+  // group wells by sampleType/sampleName prefix
+  const groups = {};
+  for (const w of exp.wells) {
+    if (!w.sampleId) continue;
+    const key = w.sampleType === 'ntc' ? 'NTC' : (w.sampleType === 'pos' ? 'PC' : (w.sampleName || 'S').split(' ')[0]);
+    (groups[key] = groups[key] || []).push(w.id);
+  }
+  // 1) technical replicate SD per sample (all unknown samples, not just control)
+  const perSample = {};
+  for (const w of exp.wells) {
+    if (!w.sampleId || w.sampleType !== 'unkn') continue;
+    const c = cqOf(w.id, 'SYBR Green I');
+    if (c === null) continue;
+    const name = w.sampleName || ('S' + w.id);
+    (perSample[name] = perSample[name] || []).push(c);
+  }
+  const sds = Object.values(perSample).filter(a => a.length > 1)
+    .map(a => { const m = a.reduce((x, y) => x + y, 0) / a.length; return Math.sqrt(a.reduce((x, y) => x + (y - m) ** 2, 0) / (a.length - 1)); });
+  const sdMean = sds.length ? sds.reduce((a, b) => a + b, 0) / sds.length : null;
+  const sdMax = sds.length ? Math.max(...sds) : null;
+  const sdNote = params ? '（设定 SD ' + params.techSd + '）' : '';
+  const sdTxt = sdMean === null ? '—' : (sdMean < 0.5 ? ok(sdMean.toFixed(3)) : warn(sdMean.toFixed(3) + ' ⚠ 偏高'));
+  cards.push(['复孔 SD（样本内，' + sds.length + ' 样本）', sdTxt + (sdMax !== null && sdMax >= 1 ? '，最大 ' + sdMax.toFixed(3) + ' ⚠' : ''), '技术重复稳定性' + sdNote]);
+  // 2) NTC
+  const ntcIds = groups['NTC'] || [];
+  let ntcAllNeg = true;
+  for (const w of ntcIds) {
+    const c = exp.computed[w + '|SYBR Green I'];
+    if (!c || c['11 Intermediate Call'] !== 'Negative') ntcAllNeg = false;
+  }
+  cards.push(['NTC 无扩增', ntcIds.length ? (ntcAllNeg ? ok('✓ 全部 Negative') : bad('✗ 出现非 Negative')) : '未设置', '阴性对照 ' + ntcIds.length + ' 孔']);
+  // 3) IC stability (Yellow555)
+  const icWells = exp.wells.filter(w => w.sampleId && exp.computed[w.id + '|Yellow555']);
+  if (icWells.length) {
+    const icCqs = icWells.map(w => cqOf(w.id, 'Yellow555')).filter(v => v !== null);
+    const m = icCqs.reduce((a, b) => a + b, 0) / icCqs.length;
+    const sd = icCqs.length > 1 ? Math.sqrt(icCqs.reduce((a, b) => a + (b - m) ** 2, 0) / (icCqs.length - 1)) : 0;
+    cards.push(['内参稳定性 (Yellow555)', sd < 0.5 ? ok('Cq ' + m.toFixed(2) + ' ± ' + sd.toFixed(3)) : warn('Cq ' + m.toFixed(2) + ' ± ' + sd.toFixed(3) + ' ⚠ 波动大'), icCqs.length + ' 孔']);
+  } else {
+    cards.push(['内参稳定性 (Yellow555)', '未设置', '—']);
+  }
+  // 4) group significance: Control vs Treatment Cq
+  const ctrlWells = (groups['Control'] || []);
+  const treatWells = groups['Treatment'] || [];
+  const cqMean = (ids) => { const vs = ids.map(w => cqOf(w, 'SYBR Green I')).filter(v => v !== null); return vs; };
+  const a = cqMean(ctrlWells), b = cqMean(treatWells);
+  if (a.length >= 2 && b.length >= 2) {
+    const ma = a.reduce((x, y) => x + y, 0) / a.length, mb = b.reduce((x, y) => x + y, 0) / b.length;
+    const sa = Math.sqrt(a.reduce((x, y) => x + (y - ma) ** 2, 0) / (a.length - 1));
+    const sb = Math.sqrt(b.reduce((x, y) => x + (y - mb) ** 2, 0) / (b.length - 1));
+    const se = Math.sqrt(sa * sa / a.length + sb * sb / b.length);
+    const t = (ma - mb) / se;
+    // Welch's t approximate df
+    const df = Math.pow(sa * sa / a.length + sb * sb / b.length, 2) / (Math.pow(sa * sa / a.length, 2) / (a.length - 1) + Math.pow(sb * sb / b.length, 2) / (b.length - 1));
+    const p = approxTp(Math.abs(t), df);
+    const fold = Math.pow(2, ma - mb);
+    const sig = p < 0.05;
+    cards.push(['组间差异 (Ctrl vs Treat)', sig ? ok('ΔCq ' + (ma - mb).toFixed(2) + '，p=' + (p < 0.001 ? p.toExponential(1) : p.toFixed(4)) + ' 显著') : warn('ΔCq ' + (ma - mb).toFixed(2) + '，p=' + p.toFixed(4) + ' 不显著'), '表达倍数 ≈ ' + fold.toFixed(1) + '×']);
+  } else {
+    cards.push(['组间差异 (Ctrl vs Treat)', '样本不足', '—']);
+  }
+  E.qcCards.innerHTML = cards.map(c =>
+    '<div class="ccard"><div class="k">' + c[0] + '</div><div class="v">' + c[1] + '</div><div style="font-size:10px;color:#5c7399">' + c[2] + '</div></div>').join('');
+  // verdict
+  const ntcOk = ntcIds.length === 0 || ntcAllNeg;
+  const icOk = !icWells.length || (() => { const icCqs = icWells.map(w => cqOf(w.id, 'Yellow555')).filter(v => v !== null); if (icCqs.length < 2) return true; const m = icCqs.reduce((a, b) => a + b, 0) / icCqs.length; const sd = Math.sqrt(icCqs.reduce((a, b) => a + (b - m) ** 2, 0) / (icCqs.length - 1)); return sd < 0.5; })();
+  const verdicts = [];
+  if (sdMean !== null && sdMean >= 0.5) verdicts.push('复孔 SD 偏高');
+  if (!ntcOk) verdicts.push('NTC 出现扩增信号');
+  if (!icOk) verdicts.push('内参波动大');
+  E.qcVerdict.innerHTML = '<b>QC 结论：</b>' + (verdicts.length ? '存在 ' + verdicts.join('、') + ' — 建议学生检查实验设计' : '全部指标通过，模拟数据符合预期（输入为模拟、处理为真实引擎流程）✓');
+}
+
+// Student-t two-tailed p-value (Numerical Recipes betai approximation)
+function approxTp(t, df) {
+  const x = df / (df + t * t);
+  const ib = (a, b, x) => {
+    const betacf = (a, b, x) => {
+      const MAXIT = 200, EPS = 3e-12, FPMIN = 1e-300;
+      const qab = a + b, qap = a + 1, qam = a - 1;
+      let c = 1, d = 1 - qab * x / qap;
+      if (Math.abs(d) < FPMIN) d = FPMIN;
+      d = 1 / d; let h = d;
+      for (let m = 1; m <= MAXIT; m++) {
+        const m2 = 2 * m;
+        let aa = m * (b - m) * x / ((qam + m2) * (a + m2));
+        d = 1 + aa * d; if (Math.abs(d) < FPMIN) d = FPMIN;
+        c = 1 + aa / c; if (Math.abs(c) < FPMIN) c = FPMIN;
+        d = 1 / d; h *= d * c;
+        aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
+        d = 1 + aa * d; if (Math.abs(d) < FPMIN) d = FPMIN;
+        c = 1 + aa / c; if (Math.abs(c) < FPMIN) c = FPMIN;
+        d = 1 / d; const del = d * c; h *= del;
+        if (Math.abs(del - 1) < EPS) break;
+      }
+      return h;
+    };
+    if (x <= 0) return 0;
+    if (x >= 1) return 1;
+    const bt = Math.exp(lgamma(a + b) - lgamma(a) - lgamma(b) + a * Math.log(x) + b * Math.log(1 - x));
+    return x < (a + 1) / (a + b + 2) ? bt * betacf(a, b, x) / a : 1 - bt * betacf(b, a, 1 - x) / b;
+  };
+  const lgamma = (x) => {
+    const cof = [76.18009172947146, -86.50532032941677, 24.01409824083091, -1.231739572450155, 0.1208650973866179e-2, -0.5395239384953e-5];
+    let y = x, tmp = x + 5.5; tmp -= (x + 0.5) * Math.log(tmp);
+    let ser = 1.000000000190015;
+    for (let j = 0; j < 6; j++) ser += cof[j] / ++y;
+    return -tmp + Math.log(2.5066282746310005 * ser / x);
+  };
+  return ib(df / 2, 0.5, x);
+}
+
 function renderCompare(comp) {
   const fmt = (v, d) => (v === null || v === undefined || isNaN(v)) ? '—' : (Math.round(v * Math.pow(10, d || 2)) / Math.pow(10, d || 2)).toString();
   const pText = comp.pairedT && comp.pairedT.p !== null && comp.pairedT.p !== undefined && !isNaN(comp.pairedT.p)
@@ -585,6 +797,14 @@ function init() {
   });
   E.metricSelect.addEventListener('change', () => { state.metric = E.metricSelect.value; renderAll(); });
   E.channelSelect.addEventListener('change', () => { state.channel = parseInt(E.channelSelect.value, 10); renderAll(); });
+
+  // student simulation panel
+  E.btnSynth.addEventListener('click', synOpen);
+  E.synClose.addEventListener('click', synClose);
+  E.synModal.addEventListener('click', e => { if (e.target === E.synModal) synClose(); });
+  E.synGo.addEventListener('click', onSynthesize);
+  for (const f of SYN_FIELDS) E[f.id].addEventListener('input', synValidate);
+  for (const ck of [E.synNtc, E.synIc, E.synPos]) ck.addEventListener('change', synValidate);
 
   // restore server-side state
   fetch('/api/status').then(r => r.json()).then(s => {
