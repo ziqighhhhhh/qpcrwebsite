@@ -105,7 +105,11 @@ function serveStatic(res, urlPath) {
   if (!full.startsWith(path.join(projectDir, 'public'))) { sendText(res, 403, 'forbidden'); return; }
   if (!fs.existsSync(full) || fs.statSync(full).isDirectory()) { sendText(res, 404, 'not found'); return; }
   const ext = path.extname(full).toLowerCase();
-  res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
+  // no-store: this is a local tool that changes often; never serve stale JS/CSS
+  res.writeHead(200, {
+    'Content-Type': MIME[ext] || 'application/octet-stream',
+    'Cache-Control': 'no-store',
+  });
   fs.createReadStream(full).pipe(res);
 }
 
