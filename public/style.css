@@ -1,4 +1,6 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
+/* hidden 属性必须真正隐藏元素：.modal-overlay/.sim-summary 的 display:flex 会覆盖 UA 的 [hidden] 规则 */
+[hidden] { display: none !important; }
 body {
   font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
   background: #0f1420; color: #dbe4f0; min-height: 100vh;
