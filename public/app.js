@@ -29,6 +29,10 @@ const E = {
   leftHeat: $('leftHeat'), leftLegend: $('leftLegend'), leftHeatTitle: $('leftHeatTitle'),
   rightHeat: $('rightHeat'), rightLegend: $('rightLegend'), rightHeatTitle: $('rightHeatTitle'),
   leftTable: $('leftTable'), rightTable: $('rightTable'),
+  relChart: $('relChart'), cqChart: $('cqChart'),
+  ddctTable: $('ddctTable'), btnDdctCsv: $('btnDdctCsv'),
+  leftMelt: $('leftMelt'), leftMeltLegend: $('leftMeltLegend'),
+  rightMelt: $('rightMelt'), rightMeltLegend: $('rightMeltLegend'),
 };
 
 // ---------------- api ----------------
@@ -267,6 +271,39 @@ function renderTable(side, exp) {
   });
 }
 
+// ---------------- melting curves ----------------
+function renderMelt(side, exp) {
+  const canvas = side === 'left' ? E.leftMelt : E.rightMelt;
+  const legendEl = side === 'left' ? E.leftMeltLegend : E.rightMeltLegend;
+  const dye = exp.dyes[state.channel] || exp.dyes[0];
+  if (!exp.melt || !Object.keys(exp.melt).length) {
+    drawLineChart(canvas, [], { xLabel: 'Temperature (°C)', yLabel: 'Fluorescence' });
+    canvas.getContext('2d'); // noop touch
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width / (window.devicePixelRatio || 1);
+    ctx.fillStyle = '#5c7399'; ctx.font = '13px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(side === 'right' ? '对照组为模拟扩增数据（无熔解采集）' : '无熔解数据', w / 2, 100);
+    legendEl.innerHTML = '';
+    return;
+  }
+  const wells = [];
+  if (state.selectedWell) wells.push(state.selectedWell);
+  state.compare.forEach(w => { if (!wells.includes(w)) wells.push(w); });
+  const colors = ['#4da3ff', '#ff8d6b', '#7fe3a0', '#ffd166', '#c17bff', '#5ad0d0'];
+  const series = [];
+  const legendItems = [];
+  wells.forEach((w, i) => {
+    const m = exp.melt[w + '|' + dye];
+    if (!m || !m.points.length) return;
+    const color = colors[i % colors.length];
+    const label = (exp.wells[w - 1] || {}).label;
+    series.push({ name: label, color, width: state.selectedWell === w ? 3 : 1.5, dash: state.selectedWell === w ? null : [4, 3], points: m.points.map(p => ({ x: p.t, y: p.f })) });
+    legendItems.push('<span class="cl-item"><span class="cl-dot" style="background:' + color + '"></span>' + label + '</span>');
+  });
+  legendEl.innerHTML = legendItems.join('') || '<span class="cl-item" style="color:#5c7399">未选择孔位</span>';
+  drawLineChart(canvas, series, { xLabel: 'Temperature (°C)', yLabel: 'Fluorescence', height: 200 });
+}
+
 // ---------------- side rendering ----------------
 function renderSide(side, exp) {
   const dye = exp.dyes[state.channel] || exp.dyes[0];
@@ -283,6 +320,8 @@ function renderSide(side, exp) {
     (w, d) => metricColor(exp, w, d), () => {});
   buildLegend(side === 'left' ? E.leftLegend : E.rightLegend, state.metric === 'Call' ? 'call' : 'metric');
   (side === 'left' ? E.leftHeatTitle : E.rightHeatTitle).textContent = '· ' + dye;
+  // 1b) melting curves
+  renderMelt(side, exp);
   // 4) result table
   renderTable(side, exp);
   // header titles
@@ -383,6 +422,149 @@ function renderCompare(comp) {
   E.compareCards.innerHTML = cards.map(c =>
     '<div class="ccard"><div class="k">' + c[0] + '</div><div class="v">' + c[1] + '</div></div>').join('');
   E.compareVerdict.innerHTML = '<b>结论：</b>' + (comp.verdict || '');
+  drawRelExpr(E.relChart, comp);
+  drawCqDist(E.cqChart, comp);
+  renderDdctTable(comp);
+}
+
+// relative expression bar chart (control normalized to 1)
+function drawRelExpr(canvas, comp) {
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth || 420, cssH = 240;
+  canvas.style.width = cssW + 'px'; canvas.style.height = cssH + 'px';
+  canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+  const pad = { l: 52, r: 14, t: 18, b: 30 };
+  const iw = cssW - pad.l - pad.r, ih = cssH - pad.t - pad.b;
+  const treatMean = comp.treat.summary.mean, ctrlMean = comp.ctrl.summary.mean;
+  const sdT = comp.treat.summary.sd, sdC = comp.ctrl.summary.sd;
+  // treatment relative expression vs control (=1): fold = 2^(CtrlCq - TreatCq)
+  const delta = ctrlMean - treatMean;
+  const fold = Math.pow(2, delta);
+  const foldHi = Math.pow(2, delta + (sdT + sdC));
+  const foldLo = Math.pow(2, delta - (sdT + sdC));
+  const vals = [1, fold];
+  let lo = Math.min(0, foldLo, 0), hi = Math.max(1, foldHi, 1) * 1.15;
+  if (hi <= lo) hi = lo + 1;
+  const sy = v => pad.t + ih - (v - lo) / (hi - lo) * ih;
+  // grid
+  ctx.strokeStyle = '#26304a'; ctx.fillStyle = '#6c82a6'; ctx.font = '11px sans-serif'; ctx.lineWidth = 1;
+  for (let i = 0; i <= 5; i++) {
+    const v = lo + (hi - lo) * i / 5, Y = sy(v);
+    ctx.beginPath(); ctx.moveTo(pad.l, Y); ctx.lineTo(pad.l + iw, Y); ctx.stroke();
+    ctx.textAlign = 'right'; ctx.fillText(v.toFixed(v < 0.1 ? 4 : 2), pad.l - 6, Y + 4);
+  }
+  ctx.fillStyle = '#9db4d8'; ctx.textAlign = 'center'; ctx.font = '11px sans-serif';
+  ctx.fillText('相对表达量（对照=1）', pad.l + iw / 2, cssH - 8);
+  // bars
+  const groups = [
+    { label: '实验组', v: 1, color: '#4da3ff', x: pad.l + iw * 0.3 },
+    { label: '对照组', v: fold, color: '#ff8d6b', x: pad.l + iw * 0.7 },
+  ];
+  const barW = 52;
+  groups.forEach(g => {
+    const hgt = (g.v - lo) / (hi - lo) * ih;
+    const Y = pad.t + ih - hgt;
+    ctx.fillStyle = g.color;
+    ctx.fillRect(g.x - barW / 2, Y, barW, hgt);
+    // value label on top
+    ctx.fillStyle = '#e6eefb'; ctx.textAlign = 'center'; ctx.font = 'bold 12px sans-serif';
+    ctx.fillText(g.v.toFixed(g.v < 0.1 ? 4 : 2), g.x, Y - 6);
+    ctx.fillStyle = '#9db4d8'; ctx.font = '11px sans-serif';
+    ctx.fillText(g.label, g.x, cssH - 8);
+  });
+  // error bar on treatment (foldHi/foldLo)
+  const eYlo = sy(Math.max(foldLo, lo)), eYhi = sy(Math.min(foldHi, hi));
+  ctx.strokeStyle = '#ff8d6b'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(groups[1].x, eYlo); ctx.lineTo(groups[1].x, eYhi); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(groups[1].x - 8, eYlo); ctx.lineTo(groups[1].x + 8, eYlo); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(groups[1].x - 8, eYhi); ctx.lineTo(groups[1].x + 8, eYhi); ctx.stroke();
+  // significance stars between bars
+  if (comp.significant) {
+    ctx.fillStyle = '#ffd166'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'center';
+    const yStar = pad.t + 2;
+    ctx.fillText(comp.pairedT.stars, (groups[0].x + groups[1].x) / 2, yStar);
+  }
+}
+
+// Cq distribution: jittered scatter + box (Q1/median/Q3, min/max)
+function drawCqDist(canvas, comp) {
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth || 420, cssH = 240;
+  canvas.style.width = cssW + 'px'; canvas.style.height = cssH + 'px';
+  canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+  const pad = { l: 46, r: 16, t: 16, b: 30 };
+  const iw = cssW - pad.l - pad.r, ih = cssH - pad.t - pad.b;
+  const groups = [
+    { label: '实验组', s: comp.treat.summary, color: '#4da3ff' },
+    { label: '对照组', s: comp.ctrl.summary, color: '#ff8d6b' },
+  ];
+  let lo = Infinity, hi = -Infinity;
+  groups.forEach(g => {
+    lo = Math.min(lo, g.s.min); hi = Math.max(hi, g.s.max);
+  });
+  const rng = hi - lo || 1; lo -= rng * 0.08; hi += rng * 0.08;
+  const sy = v => pad.t + ih - (v - lo) / (hi - lo) * ih;
+  ctx.strokeStyle = '#26304a'; ctx.fillStyle = '#6c82a6'; ctx.font = '11px sans-serif'; ctx.lineWidth = 1;
+  for (let i = 0; i <= 5; i++) {
+    const v = lo + (hi - lo) * i / 5, Y = sy(v);
+    ctx.beginPath(); ctx.moveTo(pad.l, Y); ctx.lineTo(pad.l + iw, Y); ctx.stroke();
+    ctx.textAlign = 'right'; ctx.fillText(Math.round(v * 10) / 10, pad.l - 6, Y + 4);
+  }
+  ctx.fillStyle = '#9db4d8'; ctx.textAlign = 'center'; ctx.font = '11px sans-serif';
+  ctx.fillText('Cq', pad.l + iw / 2, cssH - 8);
+  groups.forEach((g, gi) => {
+    const x = pad.l + iw * (0.5 * gi + 0.25);
+    const s = g.s;
+    // jittered scatter
+    s.values.forEach((v, i) => {
+      const jx = x + ((i % 7) - 3) * 3;
+      ctx.fillStyle = g.color;
+      ctx.beginPath(); ctx.arc(jx, sy(v), 3, 0, Math.PI * 2); ctx.fill();
+    });
+    // box: Q1..Q3, median, min..max whiskers
+    const y1 = sy(s.q1), y3 = sy(s.q3), ymed = sy(s.median), ymin = sy(s.min), ymax = sy(s.max);
+    const bw = 40;
+    ctx.strokeStyle = '#e6eefb'; ctx.lineWidth = 2;
+    ctx.strokeRect(x - bw / 2, y1, bw, y3 - y1);
+    ctx.beginPath(); ctx.moveTo(x - bw / 2, ymed); ctx.lineTo(x + bw / 2, ymed); ctx.stroke();
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x, y1); ctx.lineTo(x, ymin); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x - 6, ymin); ctx.lineTo(x + 6, ymin); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x, y3); ctx.lineTo(x, ymax); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x - 6, ymax); ctx.lineTo(x + 6, ymax); ctx.stroke();
+    // label + median value
+    ctx.fillStyle = g.color; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(g.label, x, cssH - 8);
+    ctx.fillStyle = '#e6eefb';
+    ctx.fillText('中位 ' + Math.round(s.median * 10) / 10, x, pad.t - 2);
+  });
+}
+
+// ΔΔCt transparency table
+function renderDdctTable(comp) {
+  const rows = comp.ddCtRows || [];
+  const thead = '<tr><th class="l">Well</th><th class="l">实验组 Cq</th><th class="l">对照组 Cq</th><th>ΔCt (处理−对照)</th><th>倍数 2^(对照−处理)</th></tr>';
+  const tbody = rows.map(r =>
+    '<tr><td class="l">' + r.label + '</td><td>' + r.treatCq + '</td><td>' + r.ctrlCq + '</td><td>' + r.deltaCt + '</td><td>' + r.fold + '</td></tr>').join('');
+  E.ddctTable.querySelector('thead').innerHTML = thead;
+  E.ddctTable.querySelector('tbody').innerHTML = tbody || '<tr><td colspan="5" class="l">无配对阳性孔</td></tr>';
+  E.btnDdctCsv.onclick = () => {
+    const csv = ['Well,TreatCq,CtrlCq,DeltaCt,Fold']
+      .concat(rows.map(r => [r.label, r.treatCq, r.ctrlCq, r.deltaCt, r.fold].join(',')))
+      .join('\r\n');
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'ddct_table.csv';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
 }
 
 // ---------------- init ----------------

@@ -97,3 +97,11 @@ canvas { width: 100%; height: auto; background: #10141f; border-radius: 8px; }
 .table .pos.neg { color: #ff8d8d; }
 .hint { margin-top: 6px; font-size: 11px; color: #5c7399; }
 input[type=checkbox] { accent-color: #4da3ff; }
+/* ---- statistical charts ---- */
+.stats-charts { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-top: 10px; }
+.chart-box { background: #10141f; border: 1px solid #26304a; border-radius: 8px; padding: 10px; }
+.chart-box.wide { grid-column: 1 / -1; }
+.chart-box h3 { font-size: 12px; color: #9db4d8; margin-bottom: 6px; }
+.chart-box canvas { border-radius: 6px; }
+.chart-box .hint { font-size: 10px; color: #5c7399; margin-top: 4px; }
+@media (max-width: 1200px) { .stats-charts { grid-template-columns: 1fr; } main.duo { grid-template-columns: 1fr; } }

@@ -38,6 +38,22 @@
 <section class="sim-summary" id="simResult" hidden>
   <div class="compare-cards" id="compareCards"></div>
   <div id="compareVerdict" class="verdict"></div>
+  <div class="stats-charts">
+    <div class="chart-box">
+      <h3>相对表达量（对照=1）</h3>
+      <canvas id="relChart" width="420" height="240"></canvas>
+      <div class="hint">处理组 = 2<sup>ΔCt</sup>（ΔCt = 处理 − 对照）；误差线为基于 Cq SD 的近似传播</div>
+    </div>
+    <div class="chart-box">
+      <h3>Cq 分布（散点 + 箱线）</h3>
+      <canvas id="cqChart" width="420" height="240"></canvas>
+      <div class="hint">每个点 = 一个配对阳性孔；箱线 = Q1/中位/Q3 + min/max</div>
+    </div>
+    <div class="chart-box wide">
+      <h3>ΔΔCt 计算明细 <button id="btnDdctCsv" class="btn" style="padding:2px 8px;font-size:11px">导出 CSV</button></h3>
+      <div class="table-wrap short" style="max-height:200px"><table class="table" id="ddctTable"><thead></thead><tbody></tbody></table></div>
+    </div>
+  </div>
 </section>
 
 <main class="duo">
@@ -51,6 +67,11 @@
     <section class="panel">
       <h2>2 · Combined Call Heat Map ｜ 综合判定热图 <span class="col-sub"></span></h2>
       <div id="leftCombined" class="plate plate-sm"></div>
+    </section>
+    <section class="panel">
+      <h2>1b · Melting Curves ｜ 熔解曲线 <span class="col-sub">SYBR 特异性</span></h2>
+      <canvas id="leftMelt" width="720" height="200"></canvas>
+      <div class="chart-legend" id="leftMeltLegend"></div>
     </section>
     <section class="panel">
       <h2>3 · Heat Map ｜ 孔板结果热图 <span id="leftHeatTitle" class="col-sub"></span></h2>
@@ -74,6 +95,11 @@
     <section class="panel">
       <h2>2 · Combined Call Heat Map ｜ 综合判定热图 <span class="col-sub"></span></h2>
       <div id="rightCombined" class="plate plate-sm"></div>
+    </section>
+    <section class="panel">
+      <h2>1b · Melting Curves ｜ 熔解曲线 <span class="col-sub">对照组为模拟扩增数据</span></h2>
+      <canvas id="rightMelt" width="720" height="200"></canvas>
+      <div class="chart-legend" id="rightMeltLegend"></div>
     </section>
     <section class="panel">
       <h2>3 · Heat Map ｜ 孔板结果热图 <span id="rightHeatTitle" class="col-sub"></span></h2>
