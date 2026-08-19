@@ -139,3 +139,13 @@ input[type=checkbox] { accent-color: #4da3ff; }
 .syn-issues { flex: 1; font-size: 12px; color: #ff7a7a; line-height: 1.5; }
 #synGo { font-size: 14px; padding: 9px 18px; }
 @media (max-width: 640px) { .syn-grid { grid-template-columns: 1fr; } }
+
+/* ---- internal-control gene picker ---- */
+.ic-tools { display: flex; align-items: center; gap: 10px; margin: 10px 0 8px; flex-wrap: wrap; font-size: 12px; color: #9db4d8; }
+.ic-tools input, .ic-tools select {
+  background: #1a2336; color: #dbe4f0; border: 1px solid #34476e; border-radius: 5px; padding: 4px 6px; font-size: 12px;
+}
+.ic-count { font-size: 12px; color: #8fa3c4; margin-left: auto; }
+#icPlate .well.ic { background: #8a5cf6 !important; color: #fff; }
+#icPlate .well.ic .well-pos { color: rgba(255,255,255,.7); }
+#icPlate .well.picked { outline: 2px solid #ffd166; }

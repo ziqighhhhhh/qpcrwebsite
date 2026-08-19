@@ -287,6 +287,21 @@ const server = http.createServer(async (req, res) => {
       }
       return;
     }
+    if (req.method === 'POST' && p === '/api/genes') {
+      try {
+        if (!experiment) { sendJson(res, 404, { error: 'no experiment loaded' }); return; }
+        const body = await readBody(req, 128 * 1024);
+        const opts = JSON.parse(body.toString('utf8').replace(/^\uFEFF/, ''));
+        const wells = Array.isArray(opts.wells) ? opts.wells.map(w => parseInt(w, 10)).filter(w => w >= 1 && w <= 96) : [];
+        experiment.settings.internalControlWells = wells;
+        experiment.settings.internalControlGene = String(opts.gene || '内参基因').slice(0, 40);
+        saveExperiment();
+        sendJson(res, 200, { ok: true, internalControlWells: wells, internalControlGene: experiment.settings.internalControlGene });
+      } catch (e) {
+        sendJson(res, 500, { error: 'genes failed: ' + e.message });
+      }
+      return;
+    }
     if (req.method === 'POST' && p === '/api/upload') {
       const body = await readBody(req, 200 * 1024 * 1024);
       if (!body.length) { sendJson(res, 400, { error: 'empty upload' }); return; }

@@ -12,6 +12,7 @@
   <div class="controls">
     <label class="btn upload"><input type="file" id="fileInput" accept=".lc96p,.zip" hidden>上传 .lc96p</label>
     <button id="btnAnalyze" class="btn primary" disabled>Analyze</button>
+    <button id="btnIcGene" class="btn" title="分析前先标记哪些孔是内参基因（如 GAPDH），画图将用 ΔΔCt 内参归一化" disabled>设置内参基因</button>
     <select id="metricSelect" class="select" title="热图指标">
       <option value="Call">指标: Call</option>
       <option value="Cq">指标: Cq</option>
@@ -114,6 +115,30 @@
     </section>
   </div>
 </main>
+
+<!-- 内参基因选择：分析前在 96 孔板上点选内参基因孔 -->
+<div class="modal-overlay" id="icModal" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <h2>选择内参基因孔（ΔΔCt 内参归一）</h2>
+      <button class="btn" id="icClose" title="关闭">✕</button>
+    </div>
+    <p class="hint">在孔板上<b>点击孔位</b>标记内参基因孔（如 GAPDH 所在孔，支持按住拖动批量选择）；其余有数据的孔视为目的基因。对照组生成与统计图表都会以内参孔为基准归一（内参孔在对照组中保持稳定、不滞后）。</p>
+    <div class="ic-tools">
+      <label>内参基因名 <input type="text" id="icGeneName" value="GAPDH" maxlength="40" style="width:120px"></label>
+      <button class="btn" id="icClear">清空</button>
+      <button class="btn" id="icRowA" title="选择 A 行作为内参">A 行</button>
+      <button class="btn" id="icRowB" title="选择 B 行作为内参">B 行</button>
+      <button class="btn" id="icFirst8" title="选择前 8 孔作为内参">前 8 孔</button>
+      <span class="ic-count" id="icCount">已选 0 孔</span>
+    </div>
+    <div id="icPlate" class="plate"></div>
+    <div class="modal-foot">
+      <div class="syn-issues" id="icIssues"></div>
+      <button class="btn primary" id="icSave">保存内参设置</button>
+    </div>
+  </div>
+</div>
 
 <!-- 学生模拟实验：参数面板 -->
 <div class="modal-overlay" id="synModal" hidden>

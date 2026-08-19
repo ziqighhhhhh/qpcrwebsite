@@ -41,6 +41,9 @@ const E = {
   synMelt: $('synMelt'), synSeed: $('synSeed'),
   synTotal: $('synTotal'), synIssues: $('synIssues'), synGo: $('synGo'),
   qcReport: $('qcReport'), qcCards: $('qcCards'), qcVerdict: $('qcVerdict'),
+  btnIcGene: $('btnIcGene'), icModal: $('icModal'), icClose: $('icClose'),
+  icGeneName: $('icGeneName'), icClear: $('icClear'), icRowA: $('icRowA'), icRowB: $('icRowB'), icFirst8: $('icFirst8'),
+  icPlate: $('icPlate'), icCount: $('icCount'), icIssues: $('icIssues'), icSave: $('icSave'),
 };
 
 // ---------------- api ----------------
@@ -362,10 +365,11 @@ async function onUpload(file) {
     state.selectedWell = null; state.compare = new Set(); state.channel = 0;
     renderAll();
     E.btnAnalyze.disabled = false;
+    E.btnIcGene.disabled = false;
     E.btnSimulate.disabled = false;
     E.btnExport.disabled = false;
     E.simResult.hidden = true;
-    setStatus('已加载: ' + file.name + ' — ' + state.left.curves.length + ' 条曲线，点击 Analyze 调用原引擎计算', 'ok');
+    setStatus('已加载: ' + file.name + ' — ' + state.left.curves.length + ' 条曲线，点击「设置内参基因」标记内参孔（可选），再 Analyze', 'ok');
   } catch (e) { setStatus('上传失败: ' + e.message, 'err'); }
 }
 
@@ -380,7 +384,7 @@ async function onAnalyze() {
     state.left = await getJSON('/api/experiment');
     renderAll();
     E.btnSimulate.disabled = false;
-    setStatus('分析完成 ✓ 已写入 ' + Object.keys(state.left.computed).length + ' 条计算结果（与 LC96 原软件一致）', 'ok');
+    setStatus('分析完成 ✓ 已写入 ' + Object.keys(state.left.computed).length + ' 条计算结果（与 LC96 原软件一致）' + ((state.left.settings.internalControlWells || []).length ? ' — 已启用内参归一（' + state.left.settings.internalControlGene + ' ' + state.left.settings.internalControlWells.length + ' 孔）' : ' — 未设置内参基因（可用「设置内参基因」标记）'), 'ok');
   } catch (e) { setStatus('分析失败: ' + e.message, 'err'); E.btnAnalyze.disabled = false; }
 }
 
@@ -477,6 +481,7 @@ async function onSynthesize() {
     state.selectedWell = null; state.compare = new Set(); state.channel = 0;
     renderAll();
     E.btnAnalyze.disabled = false;
+    E.btnIcGene.disabled = false;
     E.btnSimulate.disabled = false;
     E.btnExport.disabled = false;
     E.simResult.hidden = true;
@@ -616,6 +621,7 @@ function renderCompare(comp) {
   const fmt = (v, d) => (v === null || v === undefined || isNaN(v)) ? '—' : (Math.round(v * Math.pow(10, d || 2)) / Math.pow(10, d || 2)).toString();
   const pText = comp.pairedT && comp.pairedT.p !== null && comp.pairedT.p !== undefined && !isNaN(comp.pairedT.p)
     ? (comp.pairedT.p < 0.001 ? comp.pairedT.p.toExponential(2) : comp.pairedT.p.toFixed(4)) : '—';
+  const norm = comp.normalized;
   const cards = [
     ['配对阳性孔 n', String(comp.n || 0)],
     ['实验组 Cq 均值 ± SD', fmt(comp.treat.summary.mean) + ' ± ' + fmt(comp.treat.summary.sd)],
@@ -626,6 +632,13 @@ function renderCompare(comp) {
     ['表达倍数', comp.foldLabel || '—'],
     ['阳性率', '实验 ' + comp.positiveRate.treat + '<br>对照 ' + comp.positiveRate.ctrl],
   ];
+  if (norm) {
+    // normalized stats replace plain ones
+    cards.splice(3, 1, ['ΔCt (内参归一)', '处理 ' + fmt(norm.treat.dCt, 2) + ' vs 对照 ' + fmt(norm.ctrl.dCt, 2)]);
+    cards.splice(6, 1, ['表达倍数 (ΔΔCt)', comp.foldLabel || '—']);
+    cards.push(['内参稳定性', norm.icGene + ' ' + norm.icWells.length + ' 孔 Cq ' + fmt(meanArr(norm.treat.icCq), 2) + ' ± ' + fmt(sdArr(norm.treat.icCq), 2)]);
+    cards.push(['ΔΔCt', fmt(norm.ddCt, 2)]);
+  }
   E.compareCards.innerHTML = cards.map(c =>
     '<div class="ccard"><div class="k">' + c[0] + '</div><div class="v">' + c[1] + '</div></div>').join('');
   E.compareVerdict.innerHTML = '<b>结论：</b>' + (comp.verdict || '');
@@ -633,6 +646,9 @@ function renderCompare(comp) {
   drawCqDist(E.cqChart, comp);
   renderDdctTable(comp);
 }
+
+function meanArr(a) { if (!a || !a.length) return null; return a.reduce((x, y) => x + y, 0) / a.length; }
+function sdArr(a) { if (!a || a.length < 2) return 0; const m = meanArr(a); return Math.sqrt(a.reduce((x, y) => x + (y - m) * (y - m), 0) / (a.length - 1)); }
 
 // relative expression bar chart (control normalized to 1)
 function drawRelExpr(canvas, comp) {
@@ -645,13 +661,25 @@ function drawRelExpr(canvas, comp) {
   ctx.clearRect(0, 0, cssW, cssH);
   const pad = { l: 52, r: 14, t: 18, b: 30 };
   const iw = cssW - pad.l - pad.r, ih = cssH - pad.t - pad.b;
+  const norm = comp.normalized;
   const treatMean = comp.treat.summary.mean, ctrlMean = comp.ctrl.summary.mean;
   const sdT = comp.treat.summary.sd, sdC = comp.ctrl.summary.sd;
-  // treatment relative expression vs control (=1): fold = 2^(CtrlCq - TreatCq)
-  const delta = ctrlMean - treatMean;
-  const fold = Math.pow(2, delta);
-  const foldHi = Math.pow(2, delta + (sdT + sdC));
-  const foldLo = Math.pow(2, delta - (sdT + sdC));
+  // treatment relative expression vs control (=1): fold = 2^(CtrlCq - TreatCq);
+  // with an internal control the fold comes from ΔΔCt (2^−ΔΔCt) instead.
+  let fold, foldHi, foldLo, axisTitle;
+  if (norm) {
+    fold = norm.fold;
+    const sdD = sdArr([...norm.treat.icCq, ...norm.ctrl.icCq]); // IC spread as error proxy
+    foldHi = Math.pow(2, -norm.ddCt + (sdD || 0.5));
+    foldLo = Math.pow(2, -norm.ddCt - (sdD || 0.5));
+    axisTitle = '相对表达量（对照=1，ΔΔCt 内参归一）';
+  } else {
+    const delta = ctrlMean - treatMean;
+    fold = Math.pow(2, delta);
+    foldHi = Math.pow(2, delta + (sdT + sdC));
+    foldLo = Math.pow(2, delta - (sdT + sdC));
+    axisTitle = '相对表达量（对照=1）';
+  }
   const vals = [1, fold];
   let lo = Math.min(0, foldLo, 0), hi = Math.max(1, foldHi, 1) * 1.15;
   if (hi <= lo) hi = lo + 1;
@@ -664,7 +692,7 @@ function drawRelExpr(canvas, comp) {
     ctx.textAlign = 'right'; ctx.fillText(v.toFixed(v < 0.1 ? 4 : 2), pad.l - 6, Y + 4);
   }
   ctx.fillStyle = '#9db4d8'; ctx.textAlign = 'center'; ctx.font = '11px sans-serif';
-  ctx.fillText('相对表达量（对照=1）', pad.l + iw / 2, cssH - 8);
+  ctx.fillText(axisTitle, pad.l + iw / 2, cssH - 8);
   // bars
   const groups = [
     { label: '实验组', v: 1, color: '#4da3ff', x: pad.l + iw * 0.3 },
@@ -756,14 +784,31 @@ function drawCqDist(canvas, comp) {
 // ΔΔCt transparency table
 function renderDdctTable(comp) {
   const rows = comp.ddCtRows || [];
-  const thead = '<tr><th class="l">Well</th><th class="l">实验组 Cq</th><th class="l">对照组 Cq</th><th>ΔCt (处理−对照)</th><th>倍数 2^(对照−处理)</th></tr>';
-  const tbody = rows.map(r =>
-    '<tr><td class="l">' + r.label + '</td><td>' + r.treatCq + '</td><td>' + r.ctrlCq + '</td><td>' + r.deltaCt + '</td><td>' + r.fold + '</td></tr>').join('');
+  const norm = comp.normalized;
+  let thead, tbody, csvHead;
+  if (norm) {
+    thead = '<tr><th class="l">Well</th><th class="l">实验组 Cq</th><th class="l">对照组 Cq</th><th>ΔCt (处理−对照)</th><th>倍数 2^(对照−处理)</th></tr>';
+    tbody = rows.map(r =>
+      '<tr><td class="l">' + r.label + '</td><td>' + r.treatCq + '</td><td>' + r.ctrlCq + '</td><td>' + r.deltaCt + '</td><td>' + r.fold + '</td></tr>').join('');
+    csvHead = 'Well,TreatCq,CtrlCq,DeltaCt,Fold';
+  } else {
+    thead = '<tr><th class="l">Well</th><th class="l">实验组 Cq</th><th class="l">对照组 Cq</th><th>ΔCt (处理−对照)</th><th>倍数 2^(对照−处理)</th></tr>';
+    tbody = rows.map(r =>
+      '<tr><td class="l">' + r.label + '</td><td>' + r.treatCq + '</td><td>' + r.ctrlCq + '</td><td>' + r.deltaCt + '</td><td>' + r.fold + '</td></tr>').join('');
+    csvHead = 'Well,TreatCq,CtrlCq,DeltaCt,Fold';
+  }
   E.ddctTable.querySelector('thead').innerHTML = thead;
   E.ddctTable.querySelector('tbody').innerHTML = tbody || '<tr><td colspan="5" class="l">无配对阳性孔</td></tr>';
+  // append normalized summary row(s) if internal control was used
+  if (norm) {
+    const row = '<tr style="background:#1c2740;font-weight:700"><td class="l" colspan="5">内参归一（' + norm.icGene + ' ' + norm.icWells.length + ' 孔）：处理 ΔCt=' + norm.treat.dCt.toFixed(2) + '，对照 ΔCt=' + norm.ctrl.dCt.toFixed(2) + '，ΔΔCt=' + norm.ddCt.toFixed(2) + '，表达倍数=' + (norm.fold >= 100 ? Math.round(norm.fold) : norm.fold.toFixed(2)) + '×</td></tr>';
+    E.ddctTable.querySelector('tbody').insertAdjacentHTML('beforeend', row);
+  }
   E.btnDdctCsv.onclick = () => {
-    const csv = ['Well,TreatCq,CtrlCq,DeltaCt,Fold']
+    const extra = norm ? ['', 'IC_gene,' + norm.icGene, 'IC_wells,' + norm.icWells.join(' '), 'Treat_dCt,' + norm.treat.dCt.toFixed(2), 'Ctrl_dCt,' + norm.ctrl.dCt.toFixed(2), 'ddCt,' + norm.ddCt.toFixed(2), 'Fold,' + norm.fold.toFixed(4)] : [];
+    const csv = [csvHead]
       .concat(rows.map(r => [r.label, r.treatCq, r.ctrlCq, r.deltaCt, r.fold].join(',')))
+      .concat(extra)
       .join('\r\n');
     const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
     const a = document.createElement('a');
@@ -772,6 +817,89 @@ function renderDdctTable(comp) {
     a.click();
     URL.revokeObjectURL(a.href);
   };
+}
+
+// ---------------- internal-control gene picker ----------------
+let icSelection = new Set(); // well ids marked as IC gene (unsaved working set)
+let icDragActive = false, icDragPaint = false;
+
+function icOpen() {
+  if (!state.left) return;
+  icSelection = new Set(state.left.settings.internalControlWells || []);
+  E.icGeneName.value = state.left.settings.internalControlGene || 'GAPDH';
+  icRenderPlate();
+  E.icModal.hidden = false;
+  E.icIssues.textContent = '';
+}
+function icClose() { E.icModal.hidden = true; }
+
+function icRenderPlate() {
+  const exp = state.left;
+  const dye = exp.dyes[0];
+  E.icPlate.innerHTML = '';
+  for (const w of exp.wells) {
+    const hasCurve = !!curveOf(exp, w.id, dye);
+    const div = document.createElement('div');
+    div.className = 'well' + (hasCurve ? '' : ' empty') + (icSelection.has(w.id) ? ' ic' : '');
+    div.dataset.well = w.id;
+    div.style.background = hasCurve ? '#1f2a44' : '#1d2537';
+    div.innerHTML = '<span class="well-label">' + (w.sampleName || '').replace(/^Sample\s*/i, '') + '</span><span class="well-pos">' + w.label + '</span>';
+    if (!hasCurve) { div.title = w.label + ' 无数据'; }
+    else {
+      div.title = w.label + (w.sampleName ? ' · ' + w.sampleName : '');
+      div.addEventListener('mousedown', e => {
+        e.preventDefault();
+        icDragActive = true;
+        icDragPaint = !icSelection.has(w.id);
+        icToggleWell(w.id, icDragPaint);
+      });
+      div.addEventListener('mouseenter', () => { if (icDragActive) icToggleWell(w.id, icDragPaint); });
+    }
+    E.icPlate.appendChild(div);
+  }
+  document.addEventListener('mouseup', () => { icDragActive = false; }, { once: true });
+  E.icCount.textContent = '已选 ' + icSelection.size + ' 孔（内参）';
+}
+
+function icToggleWell(wellId, paint) {
+  if (paint) icSelection.add(wellId); else icSelection.delete(wellId);
+  const div = E.icPlate.querySelector('[data-well="' + wellId + '"]');
+  if (div) div.classList.toggle('ic', icSelection.has(wellId));
+  E.icCount.textContent = '已选 ' + icSelection.size + ' 孔（内参）';
+}
+
+async function icSave() {
+  const wells = [...icSelection];
+  const gene = E.icGeneName.value.trim() || '内参基因';
+  try {
+    const r = await fetch('/api/genes', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ wells, gene }),
+    });
+    const res = await r.json();
+    if (!r.ok) throw new Error(res.error || 'save failed');
+    state.left.settings.internalControlWells = res.internalControlWells;
+    state.left.settings.internalControlGene = res.internalControlGene;
+    icClose();
+    // if a control group already exists, re-compare with normalization
+    if (state.right) {
+      setStatus('内参设置已保存（' + res.internalControlWells.length + ' 孔）— 重新生成对照组以应用内参归一', 'ok');
+      E.btnSimulate.disabled = false;
+    } else {
+      setStatus('内参基因已设置：' + res.internalControlWells.length + ' 孔（' + res.internalControlGene + '）— 可 Analyze 后生成对照组', 'ok');
+    }
+  } catch (e) { E.icIssues.textContent = '保存失败: ' + e.message; }
+}
+
+function icQuickSelect(fn) {
+  const exp = state.left;
+  const dye = exp.dyes[0];
+  for (const w of exp.wells) {
+    if (curveOf(exp, w.id, dye)) {
+      if (fn(w)) icSelection.add(w.id); else icSelection.delete(w.id);
+    }
+  }
+  icRenderPlate();
 }
 
 // ---------------- init ----------------
@@ -806,6 +934,16 @@ function init() {
   for (const f of SYN_FIELDS) E[f.id].addEventListener('input', synValidate);
   for (const ck of [E.synNtc, E.synIc, E.synPos]) ck.addEventListener('change', synValidate);
 
+  // internal-control gene picker
+  E.btnIcGene.addEventListener('click', icOpen);
+  E.icClose.addEventListener('click', icClose);
+  E.icModal.addEventListener('click', e => { if (e.target === E.icModal) icClose(); });
+  E.icClear.addEventListener('click', () => { icSelection.clear(); icRenderPlate(); });
+  E.icRowA.addEventListener('click', () => icQuickSelect(w => w.id <= 12));
+  E.icRowB.addEventListener('click', () => icQuickSelect(w => w.id > 12 && w.id <= 24));
+  E.icFirst8.addEventListener('click', () => icQuickSelect(w => w.id <= 8));
+  E.icSave.addEventListener('click', icSave);
+
   // restore server-side state
   fetch('/api/status').then(r => r.json()).then(s => {
     if (s.experiment) {
@@ -813,6 +951,7 @@ function init() {
         state.left = exp;
         renderAll();
         E.btnAnalyze.disabled = !!exp.analyzedAt;
+        E.btnIcGene.disabled = false;
         E.btnSimulate.disabled = false;
         E.btnExport.disabled = false;
         setStatus('已恢复实验: ' + exp.name + (exp.analyzedAt ? '（已分析，可生成对照组）' : ' — 点击 Analyze 计算'), 'ok');
