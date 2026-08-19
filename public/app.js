@@ -649,6 +649,12 @@ function renderCompare(comp) {
 
 function meanArr(a) { if (!a || !a.length) return null; return a.reduce((x, y) => x + y, 0) / a.length; }
 function sdArr(a) { if (!a || a.length < 2) return 0; const m = meanArr(a); return Math.sqrt(a.reduce((x, y) => x + (y - m) * (y - m), 0) / (a.length - 1)); }
+// five-number summary for the box plot (client-side copy of lib/stats.js summary)
+function summaryOf(values) {
+  const vs = values.slice().sort((a, b) => a - b);
+  const q = (f) => { const p = (vs.length - 1) * f, i = Math.floor(p), t = p - i; return vs[i] + t * ((vs[i + 1] || vs[i]) - vs[i]); };
+  return { values, min: vs[0], max: vs[vs.length - 1], q1: q(0.25), median: q(0.5), q3: q(0.75), mean: meanArr(vs), sd: sdArr(vs) };
+}
 
 // relative expression bar chart (control normalized to 1)
 function drawRelExpr(canvas, comp) {
@@ -681,7 +687,15 @@ function drawRelExpr(canvas, comp) {
     axisTitle = '相对表达量（对照=1）';
   }
   const vals = [1, fold];
-  let lo = Math.min(0, foldLo, 0), hi = Math.max(1, foldHi, 1) * 1.15;
+  // include per-sample relExpr points in the Y range so the scatter is not clipped
+  let sampLo = null, sampHi = null;
+  if (norm) {
+    for (const a of [norm.treat.relExpr, norm.ctrl.relExpr]) for (const v of a) {
+      if (v < sampLo || sampLo === null) sampLo = v;
+      if (v > sampHi || sampHi === null) sampHi = v;
+    }
+  }
+  let lo = Math.min(0, foldLo, sampLo === null ? 0 : sampLo), hi = Math.max(1, foldHi, sampHi === null ? 1 : sampHi) * 1.1;
   if (hi <= lo) hi = lo + 1;
   const sy = v => pad.t + ih - (v - lo) / (hi - lo) * ih;
   // grid
@@ -693,11 +707,16 @@ function drawRelExpr(canvas, comp) {
   }
   ctx.fillStyle = '#9db4d8'; ctx.textAlign = 'center'; ctx.font = '11px sans-serif';
   ctx.fillText(axisTitle, pad.l + iw / 2, cssH - 8);
-  // bars
-  const groups = [
-    { label: '实验组', v: 1, color: '#4da3ff', x: pad.l + iw * 0.3 },
-    { label: '对照组', v: fold, color: '#ff8d6b', x: pad.l + iw * 0.7 },
-  ];
+  // bars (group mean); with IC, overlay per-sample relative expression scatter
+  const groups = norm
+    ? [
+        { label: '对照组', v: 1, color: '#4da3ff', x: pad.l + iw * 0.3, samples: norm.ctrl.relExpr },
+        { label: '实验组', v: fold, color: '#ff8d6b', x: pad.l + iw * 0.7, samples: norm.treat.relExpr },
+      ]
+    : [
+        { label: '对照组', v: 1, color: '#4da3ff', x: pad.l + iw * 0.3 },
+        { label: '实验组', v: fold, color: '#ff8d6b', x: pad.l + iw * 0.7 },
+      ];
   const barW = 52;
   groups.forEach(g => {
     const hgt = (g.v - lo) / (hi - lo) * ih;
@@ -709,6 +728,17 @@ function drawRelExpr(canvas, comp) {
     ctx.fillText(g.v.toFixed(g.v < 0.1 ? 4 : 2), g.x, Y - 6);
     ctx.fillStyle = '#9db4d8'; ctx.font = '11px sans-serif';
     ctx.fillText(g.label, g.x, cssH - 8);
+    // per-sample relative expression (ΔΔCt normalized) as scatter on top of bar
+    if (g.samples && g.samples.length) {
+      g.samples.forEach((v, i) => {
+        const jx = g.x + ((i % 9) - 4) * 4;
+        const yv = Math.max(lo, Math.min(hi, v));
+        ctx.fillStyle = 'rgba(0,0,0,.45)';
+        ctx.beginPath(); ctx.arc(jx, sy(yv), 2.6, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(jx, sy(yv), 2.6, 0, Math.PI * 2); ctx.stroke();
+      });
+    }
   });
   // error bar on treatment (foldHi/foldLo)
   const eYlo = sy(Math.max(foldLo, lo)), eYhi = sy(Math.min(foldHi, hi));
@@ -724,7 +754,9 @@ function drawRelExpr(canvas, comp) {
   }
 }
 
-// Cq distribution: jittered scatter + box (Q1/median/Q3, min/max)
+// Cq distribution: jittered scatter + box (Q1/median/Q3, min/max).
+// With an internal control, plots per-well ΔCt (target Cq − group mean IC Cq)
+// so the distribution is already normalized by the reference gene.
 function drawCqDist(canvas, comp) {
   const dpr = window.devicePixelRatio || 1;
   const cssW = canvas.clientWidth || 420, cssH = 240;
@@ -735,13 +767,20 @@ function drawCqDist(canvas, comp) {
   ctx.clearRect(0, 0, cssW, cssH);
   const pad = { l: 46, r: 16, t: 16, b: 30 };
   const iw = cssW - pad.l - pad.r, ih = cssH - pad.t - pad.b;
-  const groups = [
-    { label: '实验组', s: comp.treat.summary, color: '#4da3ff' },
-    { label: '对照组', s: comp.ctrl.summary, color: '#ff8d6b' },
-  ];
+  const norm = comp.normalized;
+  const groups = norm
+    ? [
+        { label: '实验组', values: norm.treat.dCtValues, color: '#4da3ff', summary: summaryOf(norm.treat.dCtValues) },
+        { label: '对照组', values: norm.ctrl.dCtValues, color: '#ff8d6b', summary: summaryOf(norm.ctrl.dCtValues) },
+      ]
+    : [
+        { label: '实验组', s: comp.treat.summary, color: '#4da3ff' },
+        { label: '对照组', s: comp.ctrl.summary, color: '#ff8d6b' },
+      ];
   let lo = Infinity, hi = -Infinity;
   groups.forEach(g => {
-    lo = Math.min(lo, g.s.min); hi = Math.max(hi, g.s.max);
+    const s = g.s || g.summary;
+    lo = Math.min(lo, s.min); hi = Math.max(hi, s.max);
   });
   const rng = hi - lo || 1; lo -= rng * 0.08; hi += rng * 0.08;
   const sy = v => pad.t + ih - (v - lo) / (hi - lo) * ih;
@@ -752,12 +791,12 @@ function drawCqDist(canvas, comp) {
     ctx.textAlign = 'right'; ctx.fillText(Math.round(v * 10) / 10, pad.l - 6, Y + 4);
   }
   ctx.fillStyle = '#9db4d8'; ctx.textAlign = 'center'; ctx.font = '11px sans-serif';
-  ctx.fillText('Cq', pad.l + iw / 2, cssH - 8);
+  ctx.fillText(norm ? 'ΔCt（目的 − ' + norm.icGene + '）' : 'Cq', pad.l + iw / 2, cssH - 8);
   groups.forEach((g, gi) => {
     const x = pad.l + iw * (0.5 * gi + 0.25);
-    const s = g.s;
+    const s = g.s || g.summary;
     // jittered scatter
-    s.values.forEach((v, i) => {
+    (g.values || s.values).forEach((v, i) => {
       const jx = x + ((i % 7) - 3) * 3;
       ctx.fillStyle = g.color;
       ctx.beginPath(); ctx.arc(jx, sy(v), 3, 0, Math.PI * 2); ctx.fill();
