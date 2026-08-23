@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>qPCR Web — 数据分析（LightCycler 96 定性分析）</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="brand">qPCR <span>Web</span></div>
+  <div class="controls">
+    <a class="btn" href="/" title="返回 96 孔板命名页（实验设计入口）">① 孔板命名</a>
+    <label class="btn upload"><input type="file" id="fileInput" accept=".lc96p,.zip" hidden>上传 .lc96p</label>
+    <button id="btnAnalyze" class="btn primary" disabled>Analyze</button>
+    <button id="btnIcGene" class="btn" title="分析前先标记哪些孔是内参基因（如 GAPDH），画图将用 ΔΔCt 内参归一化" disabled>设置内参基因</button>
+    <select id="metricSelect" class="select" title="热图指标">
+      <option value="Call">指标: Call</option>
+      <option value="Cq">指标: Cq</option>
+      <option value="Slope">指标: Slope</option>
+      <option value="EPF">指标: EPF</option>
+    </select>
+    <select id="channelSelect" class="select" title="通道"></select>
+    <span class="spacer"></span>
+    <label class="sim-inline">对照组 ΔCt <input type="range" id="simDelta" min="3" max="12" step="1" value="8" title="对照组扩增滞后循环数"><span id="simDeltaLabel">8</span></label>
+    <button id="btnSimulate" class="btn primary" disabled>生成对照组</button>
+    <a id="btnDownloadControl" class="btn" href="#" download disabled>下载对照组 .lc96p</a>
+    <button id="btnSynth" class="btn accent" title="从零合成一套模拟实验数据（学生练习用），参数带合理范围校验">学生模拟实验</button>
+    <div class="dropdown">
+      <button class="btn" id="btnExport" disabled>导出 ▾</button>
+      <div class="dropdown-menu" id="exportMenu">
+        <a href="#" data-format="csv">CSV</a>
+        <a href="#" data-format="json">JSON</a>
+        <a href="#" data-format="xlsx">Excel (XLSX)</a>
+      </div>
+    </div>
+  </div>
+  <div id="status" class="status">未加载实验 — 请上传 .lc96p 文件</div>
+</header>
+
+<section class="sim-summary" id="simResult" hidden>
+  <div class="compare-cards" id="compareCards"></div>
+  <div id="compareVerdict" class="verdict"></div>
+  <div class="stats-charts">
+    <div class="chart-box">
+      <h3>相对表达量（对照=1）</h3>
+      <canvas id="relChart" width="420" height="240"></canvas>
+      <div class="hint">处理组 = 2<sup>ΔCt</sup>（ΔCt = 处理 − 对照）；误差线为基于 Cq SD 的近似传播</div>
+    </div>
+    <div class="chart-box">
+      <h3>Cq 分布（散点 + 箱线）</h3>
+      <canvas id="cqChart" width="420" height="240"></canvas>
+      <div class="hint">每个点 = 一个配对阳性孔；箱线 = Q1/中位/Q3 + min/max</div>
+    </div>
+    <div class="chart-box wide">
+      <h3>ΔΔCt 计算明细 <button id="btnDdctCsv" class="btn" style="padding:2px 8px;font-size:11px">导出 CSV</button></h3>
+      <div class="table-wrap short" style="max-height:200px"><table class="table" id="ddctTable"><thead></thead><tbody></tbody></table></div>
+    </div>
+  </div>
+</section>
+
+<main class="duo">
+  <div class="col">
+    <div class="col-head">原始数据（实验组）<span id="leftTitle" class="col-sub"></span></div>
+    <section class="panel">
+      <h2>1 · Amplification Curves ｜ 扩增曲线 <span id="leftCurveTitle"></span></h2>
+      <canvas id="leftCurve" width="720" height="300"></canvas>
+      <div class="chart-legend" id="leftCurveLegend"></div>
+    </section>
+    <section class="panel">
+      <h2>2 · Combined Call Heat Map ｜ 综合判定热图 <span class="col-sub"></span></h2>
+      <div id="leftCombined" class="plate plate-sm"></div>
+    </section>
+    <section class="panel">
+      <h2>1b · Melting Curves ｜ 熔解曲线 <span class="col-sub">SYBR 特异性</span></h2>
+      <canvas id="leftMelt" width="720" height="200"></canvas>
+      <div class="chart-legend" id="leftMeltLegend"></div>
+    </section>
+    <section class="panel">
+      <h2>3 · Heat Map ｜ 孔板结果热图 <span id="leftHeatTitle" class="col-sub"></span></h2>
+      <div id="leftHeat" class="plate plate-sm"></div>
+      <div class="legend" id="leftLegend"></div>
+    </section>
+    <section class="panel">
+      <h2>4 · Result Table ｜ 结果明细表</h2>
+      <div class="table-wrap short"><table class="table" id="leftTable"><thead></thead><tbody></tbody></table></div>
+      <div class="hint">点击表头排序；勾选 ☐ 将孔加入曲线对比（左右联动）</div>
+    </section>
+  </div>
+
+  <div class="col">
+    <div class="col-head">对照组（模拟生成）<span id="rightTitle" class="col-sub"></span></div>
+    <section class="panel">
+      <h2>1 · Amplification Curves ｜ 扩增曲线 <span id="rightCurveTitle"></span></h2>
+      <canvas id="rightCurve" width="720" height="300"></canvas>
+      <div class="chart-legend" id="rightCurveLegend"></div>
+    </section>
+    <section class="panel">
+      <h2>2 · Combined Call Heat Map ｜ 综合判定热图 <span class="col-sub"></span></h2>
+      <div id="rightCombined" class="plate plate-sm"></div>
+    </section>
+    <section class="panel">
+      <h2>1b · Melting Curves ｜ 熔解曲线 <span class="col-sub">模拟沿用实验组熔解形态</span></h2>
+      <canvas id="rightMelt" width="720" height="200"></canvas>
+      <div class="chart-legend" id="rightMeltLegend"></div>
+    </section>
+    <section class="panel">
+      <h2>3 · Heat Map ｜ 孔板结果热图 <span id="rightHeatTitle" class="col-sub"></span></h2>
+      <div id="rightHeat" class="plate plate-sm"></div>
+      <div class="legend" id="rightLegend"></div>
+    </section>
+    <section class="panel">
+      <h2>4 · Result Table ｜ 结果明细表</h2>
+      <div class="table-wrap short"><table class="table" id="rightTable"><thead></thead><tbody></tbody></table></div>
+      <div class="hint">点击表头排序；勾选 ☐ 将孔加入曲线对比（左右联动）</div>
+    </section>
+  </div>
+</main>
+
+<!-- 内参基因选择：分析前在 96 孔板上点选内参基因孔 -->
+<div class="modal-overlay" id="icModal" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <h2>选择内参基因孔（ΔΔCt 内参归一）</h2>
+      <button class="btn" id="icClose" title="关闭">✕</button>
+    </div>
+    <p class="hint">在孔板上<b>点击孔位</b>标记内参基因孔（如 GAPDH 所在孔，支持按住拖动批量选择）；其余有数据的孔视为目的基因。对照组生成与统计图表都会以内参孔为基准归一（内参孔在对照组中保持稳定、不滞后）。</p>
+    <div class="ic-tools">
+      <label>内参基因名 <input type="text" id="icGeneName" value="GAPDH" maxlength="40" style="width:120px"></label>
+      <button class="btn" id="icClear">清空</button>
+      <button class="btn" id="icRowA" title="选择 A 行作为内参">A 行</button>
+      <button class="btn" id="icRowB" title="选择 B 行作为内参">B 行</button>
+      <button class="btn" id="icFirst8" title="选择前 8 孔作为内参">前 8 孔</button>
+      <span class="ic-count" id="icCount">已选 0 孔</span>
+    </div>
+    <div id="icPlate" class="plate"></div>
+    <div class="modal-foot">
+      <div class="syn-issues" id="icIssues"></div>
+      <button class="btn primary" id="icSave">保存内参设置</button>
+    </div>
+  </div>
+</div>
+
+<!-- 学生模拟实验：参数面板 -->
+<div class="modal-overlay" id="synModal" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <h2>学生模拟实验 — 参数设计</h2>
+      <button class="btn" id="synClose" title="关闭">✕</button>
+    </div>
+    <p class="hint">输入数据为按参数<b>从零合成</b>的模拟数据；上传后由<b>原版 Roche Kinetic 引擎</b>按真实流程分析（Cq / Slope / EPF / Call 与原软件一致）。参数均带合理范围校验，超出范围会提示。</p>
+    <div class="syn-grid">
+      <fieldset>
+        <legend>实验设计</legend>
+        <label>组别数 <input type="number" id="synGroups" min="2" max="4" step="1" value="2"><span class="range">2–4</span></label>
+        <label>每组样本数 <input type="number" id="synSamples" min="1" max="8" step="1" value="3"><span class="range">1–8</span></label>
+        <label>复孔数 <input type="number" id="synReps" min="1" max="3" step="1" value="3"><span class="range">1–3</span></label>
+        <label class="chk"><input type="checkbox" id="synNtc" checked> 含 NTC 无模板对照（2 孔）</label>
+        <label class="chk"><input type="checkbox" id="synIc"> 含内参通道 Yellow555（每样本 1 条）</label>
+        <label class="chk"><input type="checkbox" id="synPos"> 含阳性对照（2 孔，Cq≈基线−6）</label>
+      </fieldset>
+      <fieldset>
+        <legend>生物学</legend>
+        <label>表达倍数（处理 vs 对照） <input type="number" id="synFold" min="1.5" max="20" step="0.5" value="4"><span class="range">1.5–20</span></label>
+        <label>表达方向 <select id="synDirection"><option value="up" selected>上调（Cq 更低）</option><option value="down">下调（Cq 更高）</option></select></label>
+        <label>组内生物学 CV % <input type="number" id="synBioCv" min="5" max="40" step="1" value="15"><span class="range">5–40%</span></label>
+      </fieldset>
+      <fieldset>
+        <legend>技术</legend>
+        <label>复孔间 SD (Cq) <input type="number" id="synTechSd" min="0.05" max="1" step="0.05" value="0.2"><span class="range">0.05–1.0</span></label>
+        <label>扩增效率 % <input type="number" id="synEff" min="80" max="115" step="1" value="95"><span class="range">80–115%</span></label>
+        <label>对照组基线 Cq <input type="number" id="synCtBase" min="15" max="30" step="1" value="20"><span class="range">15–30</span></label>
+        <label>基线噪声 <select id="synNoise"><option value="1">低</option><option value="2" selected>中</option><option value="3">高</option></select></label>
+      </fieldset>
+      <fieldset>
+        <legend>特异性 / 复现</legend>
+        <label>熔解峰 <select id="synMelt"><option value="1" selected>单峰（特异性）</option><option value="2">双峰（含引物二聚体）</option></select></label>
+        <label>随机种子 <input type="number" id="synSeed" step="1" placeholder="留空=随机" title="相同种子可复现同一套数据"><span class="range">可选</span></label>
+        <div class="syn-total" id="synTotal">总孔数：18 + NTC 2 = 20</div>
+      </fieldset>
+    </div>
+    <div class="modal-foot">
+      <div class="syn-issues" id="synIssues"></div>
+      <button class="btn primary" id="synGo">生成模拟实验并分析</button>
+    </div>
+  </div>
+</div>
+
+<!-- QC 报告（合成/分析后自动生成） -->
+<section class="sim-summary" id="qcReport" hidden>
+  <h2>QC 报告（合成数据经原引擎分析后）</h2>
+  <div class="compare-cards" id="qcCards"></div>
+  <div id="qcVerdict" class="verdict"></div>
+</section>
+
+<script src="/static/chart.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

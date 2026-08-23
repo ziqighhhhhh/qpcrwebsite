@@ -7,6 +7,7 @@
 
 ## 功能
 
+- **96 孔板命名（入口页）**：打开网站第一步设计板面 —— 多选孔位填写 Target Name / Simple Name，输入即时保存到服务器 `data/layout.json`（与实验数据解耦，可先设计后上传）；数据分析页按孔位叠加显示命名，导出 CSV/JSON/XLSX 自动带 Target/Simple 列
 - 上传 `.lc96p`（LightCycler 96 实验文件，ZIP 内包含 RDML 荧光数据）
 - 一键 **Analyze**：调用原版 Kinetic 引擎计算每孔×通道的 Cq / Slope / EPF / 判定等 40+ 参数
 - **左右对称双视图**（原始数据 vs 对照组），每侧 4 区与原软件 QualDetection 布局一致：
@@ -36,13 +37,13 @@
 start.bat
 ```
 
-打开浏览器（或由 start.bat 自动打开）访问 `http://localhost:8080`，上传 `.lc96p`（如 DemoData 目录中的演示文件）→ Analyze → 查看结果 → 导出。
+打开浏览器（或由 start.bat 自动打开）访问 `http://localhost:8080`，默认进入 **「96 孔板命名」入口页**：先在孔板上设计板面（多选孔位 → 填 Target/Simple Name，自动保存），再点「进入数据分析 →」上传 `.lc96p`（如 DemoData 目录中的演示文件）→ Analyze → 查看结果（命名按孔位叠加显示在热图/结果表/曲线图例）→ 导出。
 
 `start.bat` 会：
 - 检查 Node.js 是否安装
 - 若 `bridge\engine-bridge.exe` 缺失则自动调用 `bridge\build.bat` 编译（build.bat 从 config.json 自动读取 binDir，换机器只需改 config.json）
 - 启动服务器并在 2 秒后自动打开浏览器
-- 服务器重启后自动恢复上次实验（data/ 目录持久化）
+- 服务器重启后自动恢复上次实验（data/ 目录持久化）与板面命名（data/layout.json）
 
 手动方式：`bridge\build.bat` 编译 + `node server.js` 启动。
 
@@ -50,8 +51,8 @@ start.bat
 
 ```
 ┌──────────────────────────── 浏览器 (public/) ────────────────────────────┐
-│ index.html · app.js · chart.js（原生 canvas，零依赖）                       │
-│ 96 孔热图 / 扩增曲线 / 参数表 / 通道切换 / 多孔对比 / 导出按钮               │
+│ index.html（96 孔板命名入口）· analysis.html（数据分析）· app.js · chart.js │
+│ 命名即时保存 /api/layout · 96 孔热图 / 扩增曲线 / 参数表 / 多孔对比 / 导出   │
 └───────────────┬──────────────────────────────────────────────────────────┘
                 │ HTTP (JSON)
 ┌───────────────▼─────────────────── Node 后端 (server.js, 零依赖) ────────┐
@@ -205,5 +206,7 @@ qpcrwebsite/
 │   ├── compare.js     # 两组统计对比（t 检验 / Cohen's d / 卡方）
 │   └── stats.js       # 零依赖统计（Numerical Recipes）
 ├── public/            # 前端（原生 JS + canvas 图表）
-└── data/              # 实验持久化（gitignored）
+│   ├── index.html     # 96 孔板命名页（入口，经 /api/layout 持久化到 data/layout.json）
+│   └── analysis.html  # 数据分析页（上传/分析/对照组/学生模拟/统计/导出）
+└── data/              # 实验与命名布局持久化（gitignored）
 ```

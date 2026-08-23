@@ -27,6 +27,7 @@ engine.configure({ binDir: config.binDir, projectDir, adf: config.adf || 'Gen-KA
 const experimentsDir = config.experimentsDir || path.join(path.dirname(config.binDir), 'experiments');
 const controlsDir = path.join(dataDir, 'controls');
 if (!fs.existsSync(controlsDir)) fs.mkdirSync(controlsDir, { recursive: true });
+const layoutFile = path.join(dataDir, 'layout.json');   // 96-well plate naming layout (entry page)
 
 // ---- single source of truth ----
 let experiment = null;
@@ -119,8 +120,9 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const p = url.pathname;
   try {
-    if (req.method === 'GET' && (p === '/' || p.startsWith('/static/'))) {
-      const rel = p === '/' ? '/' : p.slice('/static/'.length - 1); // '/x' -> '/x'
+    if (req.method === 'GET' && (p === '/' || p.startsWith('/static/') || /^\/[A-Za-z0-9_.\-]+\.html$/.test(p))) {
+      // '/static/x' -> '/x'（serveStatic 再剥掉前导斜杠）；顶层页面（如 /analysis.html）原样传递
+      const rel = p === '/' ? '/' : (p.startsWith('/static/') ? p.slice('/static/'.length - 1) : p);
       serveStatic(res, rel);
       return;
     }
@@ -138,6 +140,38 @@ const server = http.createServer(async (req, res) => {
       });
       return;
     }
+    // ---- 96-well plate naming layout (entry page persistence) ----
+    if (req.method === 'GET' && p === '/api/layout') {
+      let layout = { wells: {}, updatedAt: null };
+      try {
+        if (fs.existsSync(layoutFile)) layout = JSON.parse(fs.readFileSync(layoutFile, 'utf8'));
+      } catch (e) { /* corrupt/absent layout -> empty */ }
+      sendJson(res, 200, Object.assign({ ok: true }, layout));
+      return;
+    }
+    if (req.method === 'POST' && p === '/api/layout') {
+      try {
+        const body = await readBody(req, 256 * 1024);
+        const opts = JSON.parse(body.toString('utf8').replace(/^\uFEFF/, ''));
+        const wells = {};
+        if (opts.wells && typeof opts.wells === 'object') {
+          for (const k of Object.keys(opts.wells)) {
+            if (!/^[A-H]([1-9]|1[0-2])$/.test(k)) continue;   // only A1..H12
+            const v = opts.wells[k] || {};
+            wells[k] = {
+              target: String(v.target || '').slice(0, 80),
+              simple: String(v.simple || '').slice(0, 80),
+            };
+          }
+        }
+        const layout = { wells, updatedAt: new Date().toISOString() };
+        fs.writeFileSync(layoutFile, JSON.stringify(layout, null, 2), 'utf8');
+        sendJson(res, 200, { ok: true, count: Object.keys(wells).length, updatedAt: layout.updatedAt });
+      } catch (e) {
+        sendJson(res, 400, { error: 'layout failed: ' + e.message });
+      }
+      return;
+    }
     if (req.method === 'GET' && p === '/api/experiment') {
       if (!experiment) { sendJson(res, 404, { error: 'no experiment loaded' }); return; }
       sendJson(res, 200, experiment);
@@ -147,22 +181,31 @@ const server = http.createServer(async (req, res) => {
       if (!experiment) { sendJson(res, 404, { error: 'no experiment loaded' }); return; }
       const format = url.searchParams.get('format') || 'csv';
       const base = experiment.id;
+      // overlay plate-naming layout (Target/Simple per well) into exports
+      let layoutNames = null;
+      try {
+        if (fs.existsSync(layoutFile)) {
+          const lay = JSON.parse(fs.readFileSync(layoutFile, 'utf8'));
+          if (lay && lay.wells && typeof lay.wells === 'object') layoutNames = lay.wells;
+        }
+      } catch (e) { /* ignore layout errors in export */ }
       if (format === 'json') {
-        const buf = toJSON(experiment);
+        const out = Object.assign({}, experiment, { layoutNames: layoutNames || {} });
+        const buf = toJSON(out);
         res.writeHead(200, {
           'Content-Type': 'application/json; charset=utf-8',
           'Content-Disposition': 'attachment; filename="' + base + '.json"',
         });
         res.end(buf);
       } else if (format === 'xlsx') {
-        const buf = toXLSX(experiment);
+        const buf = toXLSX(experiment, layoutNames);
         res.writeHead(200, {
           'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
           'Content-Disposition': 'attachment; filename="' + base + '.xlsx"',
         });
         res.end(buf);
       } else {
-        const buf = toCSV(experiment);
+        const buf = toCSV(experiment, layoutNames);
         res.writeHead(200, {
           'Content-Type': 'text/csv; charset=utf-8',
           'Content-Disposition': 'attachment; filename="' + base + '.csv"',
@@ -359,7 +402,7 @@ function ensureBridgeBinary() {
 // restore last persisted experiment (best effort)
 function restoreLast() {
   try {
-    const files = fs.readdirSync(dataDir).filter(f => f.endsWith('.json'));
+    const files = fs.readdirSync(dataDir).filter(f => f.endsWith('.json') && f !== 'layout.json');
     if (files.length) loadExperiment(path.basename(files[files.length - 1], '.json'));
   } catch (e) { /* noop */ }
 }

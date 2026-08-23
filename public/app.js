@@ -7,6 +7,7 @@
 const state = {
   left: null,          // treatment experiment
   right: null,         // control experiment
+  layout: {},          // 96-well naming layout from the entry page: { "A1": {target, simple} }
   selectedWell: null,
   channel: 0,
   metric: 'Call',
@@ -53,6 +54,11 @@ async function getJSON(path) {
   return r.json();
 }
 function setStatus(text, cls) { E.status.textContent = text; E.status.className = 'status ' + (cls || ''); }
+// naming layout helper: { target, simple } | null for a well label like "A1"
+function layoutOf(label) {
+  const v = (state.layout || {})[label];
+  return v && (v.target || v.simple) ? v : null;
+}
 
 // ---------------- data access (parameterized by experiment) ----------------
 function dyeDataOf(exp, wellId, dye) {
@@ -123,10 +129,17 @@ function buildPlate(el, exp, colorFn, titleFn) {
     const div = document.createElement('div');
     div.className = 'well' + (hasCurve ? '' : ' empty') + (state.selectedWell === w.id ? ' selected' : '');
     div.style.background = hasCurve ? colorFn(w.id, dye) : '#1d2537';
-    const sampleText = (w.sampleName || '').replace(/^Sample\s*/i, '') || w.label;
+    const lay = layoutOf(w.label);
+    // 优先显示命名页的 Simple Name（其次 Target），再退回文件样本名
+    const sampleText = (lay ? (lay.simple || lay.target) : (w.sampleName || '').replace(/^Sample\s*/i, '')) || w.label;
     div.innerHTML = '<span class="well-label">' + sampleText + '</span><span class="well-pos">' + w.label + '</span>';
     const d = dyeDataOf(exp, w.id, dye);
-    div.title = w.label + (w.sampleName ? ' · ' + w.sampleName : '') + (d.call ? ' · ' + d.call : '') + (d.cq !== null && d.cq !== undefined ? ' · Cq=' + d.cq : '');
+    let tip = w.label;
+    if (lay) tip += ' · Target ' + lay.target + (lay.simple ? ' / Simple ' + lay.simple : '');
+    if (w.sampleName) tip += ' · 文件样本: ' + w.sampleName;
+    if (d.call) tip += ' · ' + d.call;
+    if (d.cq !== null && d.cq !== undefined) tip += ' · Cq=' + d.cq;
+    div.title = tip;
     div.onclick = () => {
       state.selectedWell = (state.selectedWell === w.id ? null : w.id);
       renderAll();
@@ -187,7 +200,9 @@ function renderCurves(side, exp) {
     const d = dyeDataOf(exp, w, dye);
     if (!d.curve || !d.curve.points.length) return;
     const color = colors[i % colors.length];
-    const label = (exp.wells[w - 1] || {}).label + (d.call ? ' [' + d.call + ']' : '');
+    const wobj = exp.wells[w - 1] || {};
+    const lay = layoutOf(wobj.label);
+    const label = wobj.label + (lay && lay.simple ? ' · ' + lay.simple : '') + (d.call ? ' [' + d.call + ']' : '');
     series.push({ name: label, color, width: state.selectedWell === w ? 3 : 1.5, dash: state.selectedWell === w ? null : [4, 3], points: d.curve.points.map(p => ({ x: p.c, y: p.f })) });
     legendItems.push('<span class="cl-item"><span class="cl-dot" style="background:' + color + '"></span>' + label + '</span>');
   });
@@ -199,6 +214,7 @@ function renderCurves(side, exp) {
 const TABLE_COLS = [
   { key: 'checkbox', label: '☐', num: false },
   { key: 'Well', label: 'Well', num: false },
+  { key: 'Target', label: 'Target', num: false },
   { key: 'Sample', label: 'Sample', num: false },
   { key: 'Call', label: 'Call', num: false },
   { key: 'Cq', label: 'Cq', num: true },
@@ -217,8 +233,11 @@ function renderTable(side, exp) {
     const d = dyeDataOf(exp, w.id, dye);
     if (!d.curve) continue;
     const sq = (exp.storedQual && exp.storedQual[w.id + '|' + dye]) || null;
+    const lay = layoutOf(w.label);
     rows.push({
-      key: w.id, well: w.id, Well: w.label, Sample: w.sampleName || '',
+      key: w.id, well: w.id, Well: w.label,
+      Target: lay ? lay.target : '',
+      Sample: lay ? (lay.simple || w.sampleName || '') : (w.sampleName || ''),
       Call: d.call, Cq: d.cq, Slope: d.slope, EPF: d.epf,
       Combined: sq && sq.combinedResult ? sq.combinedResult : '',
       Validity: d.params ? d.params['42 Validity Value'] : null,
@@ -243,10 +262,12 @@ function renderTable(side, exp) {
     const checked = state.compare.has(r.well) ? 'checked' : '';
     const selected = state.selectedWell === r.well ? ' class="selected-row"' : '';
     const callCls = r.Call === 'Positive' ? 'pos' : (r.Call === 'Negative' ? 'pos neg' : '');
+    const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     return '<tr' + selected + '>' +
       '<td><input type="checkbox" data-well="' + r.well + '" ' + checked + '></td>' +
       '<td class="l">' + r.Well + '</td>' +
-      '<td class="l">' + r.Sample + '</td>' +
+      '<td class="l">' + esc(r.Target) + '</td>' +
+      '<td class="l">' + esc(r.Sample) + '</td>' +
       '<td class="l ' + callCls + '">' + r.Call + '</td>' +
       '<td>' + fmtNum(r.Cq, 2) + '</td>' +
       '<td>' + fmtNum(r.Slope, 4) + '</td>' +
@@ -302,7 +323,9 @@ function renderMelt(side, exp) {
     const m = exp.melt[w + '|' + dye];
     if (!m || !m.points.length) return;
     const color = colors[i % colors.length];
-    const label = (exp.wells[w - 1] || {}).label;
+    const wobj = exp.wells[w - 1] || {};
+    const lay = layoutOf(wobj.label);
+    const label = wobj.label + (lay && lay.simple ? ' · ' + lay.simple : '');
     series.push({ name: label, color, width: state.selectedWell === w ? 3 : 1.5, dash: state.selectedWell === w ? null : [4, 3], points: m.points.map(p => ({ x: p.t, y: p.f })) });
     legendItems.push('<span class="cl-item"><span class="cl-dot" style="background:' + color + '"></span>' + label + '</span>');
   });
@@ -983,8 +1006,12 @@ function init() {
   E.icFirst8.addEventListener('click', () => icQuickSelect(w => w.id <= 8));
   E.icSave.addEventListener('click', icSave);
 
-  // restore server-side state
-  fetch('/api/status').then(r => r.json()).then(s => {
+  // restore server-side state (+ naming layout from the entry page)
+  Promise.all([
+    fetch('/api/status').then(r => r.json()),
+    fetch('/api/layout').then(r => r.json()).catch(() => ({ wells: {} })),
+  ]).then(([s, lay]) => {
+    state.layout = (lay && lay.wells) || {};
     if (s.experiment) {
       return getJSON('/api/experiment').then(exp => {
         state.left = exp;
@@ -993,7 +1020,8 @@ function init() {
         E.btnIcGene.disabled = false;
         E.btnSimulate.disabled = false;
         E.btnExport.disabled = false;
-        setStatus('已恢复实验: ' + exp.name + (exp.analyzedAt ? '（已分析，可生成对照组）' : ' — 点击 Analyze 计算'), 'ok');
+        const n = Object.keys(state.layout).length;
+        setStatus('已恢复实验: ' + exp.name + (exp.analyzedAt ? '（已分析，可生成对照组）' : ' — 点击 Analyze 计算') + (n ? ' · 板面命名 ' + n + ' 孔' : ''), 'ok');
       });
     }
     setStatus('未加载实验 — 请上传 .lc96p 文件');
