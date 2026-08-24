@@ -20,6 +20,7 @@ const { toCSV, toJSON, toXLSX } = require('./lib/export.js');
 const { readZip } = require('./lib/zip.js');
 const sim = require('./lib/simulate.js');
 const syn = require('./lib/synthesize.js');
+const design = require('./lib/design.js');
 const { compareGroups } = require('./lib/compare.js');
 const engine = require('./lib/engine.js');
 engine.configure({ binDir: config.binDir, projectDir, adf: config.adf || 'Gen-KA.adf' });
@@ -164,11 +165,46 @@ const server = http.createServer(async (req, res) => {
             };
           }
         }
-        const layout = { wells, updatedAt: new Date().toISOString() };
+        // simulation biology mode (whitelist), passed to layout-driven synthesis
+        const BIO_MODES = ['ideal', 'ic-drift', 'ntc-dimer', 'weak', 'high-cv'];
+        const bioMode = BIO_MODES.indexOf(opts.bioMode) >= 0 ? opts.bioMode : 'ideal';
+        // experiment design (qPCR 核心条件面板) — normalized & validated server-side
+        let designObj = null;
+        if (opts.design && typeof opts.design === 'object') {
+          try {
+            designObj = design.normalizeDesign(opts.design);
+          } catch (e) { /* fall back to null */ }
+        }
+        const layout = { wells, bioMode, design: designObj, updatedAt: new Date().toISOString() };
         fs.writeFileSync(layoutFile, JSON.stringify(layout, null, 2), 'utf8');
-        sendJson(res, 200, { ok: true, count: Object.keys(wells).length, updatedAt: layout.updatedAt });
+        sendJson(res, 200, { ok: true, count: Object.keys(wells).length, bioMode, design: designObj, updatedAt: layout.updatedAt });
       } catch (e) {
         sendJson(res, 400, { error: 'layout failed: ' + e.message });
+      }
+      return;
+    }
+    // ---- derive theoretical values from an experiment design (live preview on the naming page) ----
+    if (req.method === 'POST' && p === '/api/derive') {
+      try {
+        const body = await readBody(req, 128 * 1024);
+        const opts = JSON.parse(body.toString('utf8').replace(/^\uFEFF/, ''));
+        const derived = design.deriveDesign(opts.design || {});
+        sendJson(res, 200, {
+          ok: true,
+          design: derived.design,
+          quality: derived.quality,
+          efficiencyPct: derived.efficiencyPct,
+          deltaCq: derived.deltaCq,
+          treatCq: derived.treatCq,
+          theoryDct: derived.theoryDct,
+          theoreticalExpression: derived.theoreticalExpression,
+          templateCopies: derived.templateCopies,
+          totalWells: derived.totalWells,
+          issues: derived.issues,
+          layout: design.buildLayout(opts.design || {}),
+        });
+      } catch (e) {
+        sendJson(res, 400, { error: 'derive failed: ' + e.message });
       }
       return;
     }
@@ -307,7 +343,22 @@ const server = http.createServer(async (req, res) => {
         const body = await readBody(req, 256 * 1024);
         const opts = JSON.parse(body.toString('utf8').replace(/^\uFEFF/, ''));
         // student-simulated experiment: from-scratch synthesis, then the REAL pipeline
-        const synthExp = syn.synthesize(opts);
+        // when the client passes the naming plate (layout), synthesize follows the
+        // well-by-well roles inferred from target/simple names instead.
+        // When the client passes an experiment design (design), the whole plate is
+        // auto-laid-out from the design with full biological-truth + error modeling.
+        let synthExp, synthLayout = null, synthTruth = null, synthDerived = null;
+        if (opts.design && typeof opts.design === 'object') {
+          const r = design.synthesizeFromDesign(opts.design, opts);
+          synthExp = r.experiment;
+          synthLayout = r.layout;
+          synthTruth = r.truth;
+          synthDerived = r.derived;
+        } else if (opts.layout && typeof opts.layout === 'object' && Object.keys(opts.layout).length) {
+          synthExp = syn.synthesizeFromLayout(opts.layout, opts);
+        } else {
+          synthExp = syn.synthesize(opts);
+        }
         const bytes = syn.toLc96p(synthExp);
         // push through the real upload path (parse back from bytes, then real engine)
         experiment = parseLc96p(bytes, synthExp.name);
@@ -316,14 +367,51 @@ const server = http.createServer(async (req, res) => {
         if (!fs.existsSync(rawDir)) fs.mkdirSync(rawDir, { recursive: true });
         fs.writeFileSync(path.join(rawDir, experiment.id + '.lc96p'), bytes);
         await engine.analyzeExperiment(experiment);
+        // design-driven: attach truth back onto the re-parsed model (parse drops it),
+        // then run the ΔCt/ΔΔCt/Fold/statistics analysis against the REAL engine results.
+        let designAnalysis = null;
+        if (synthDerived) {
+          experiment.analysis.synthetic = {
+            design: synthDerived.design,
+            derived: synthDerived,
+            truth: synthTruth,
+            note: synthExp.analysis.synthetic.note,
+          };
+          designAnalysis = design.analyzeDesign(experiment, synthDerived.design);
+          // auto-generated plate naming overlays exports / views (layout.json is the
+          // single source for Target/Simple per well)
+          if (synthLayout) {
+            try {
+              const cur = fs.existsSync(layoutFile) ? JSON.parse(fs.readFileSync(layoutFile, 'utf8')) : {};
+              fs.writeFileSync(layoutFile, JSON.stringify(Object.assign({}, cur, { wells: synthLayout }), null, 2), 'utf8');
+            } catch (e) { /* ignore layout write errors */ }
+          }
+        }
         saveExperiment();
         controlExperiment = null; controlFile = null; // stale simulated control no longer applies
         sendJson(res, 200, {
           ok: true,
           experiment: summary(),
-          params: synthExp.analysis.synthetic.params,
+          params: synthDerived || synthExp.analysis.synthetic.params,
           note: synthExp.analysis.synthetic.note,
           limits: syn.PARAM_LIMITS,
+          design: synthDerived ? synthDerived.design : null,
+          derived: synthDerived ? {
+            efficiencyPct: synthDerived.efficiencyPct,
+            deltaCq: synthDerived.deltaCq,
+            treatCq: synthDerived.treatCq,
+            theoryDct: synthDerived.theoryDct,
+            theoreticalExpression: synthDerived.theoreticalExpression,
+            templateCopies: synthDerived.templateCopies,
+            totalWells: synthDerived.totalWells,
+            issues: synthDerived.issues,
+            quality: synthDerived.quality,
+            bioReps: synthDerived.design.bioReps,
+            techReps: synthDerived.design.techReps,
+            techSd: synthDerived.quality.pipSd,   // QC 报告显示"设定 SD"（复孔移液误差）
+          } : null,
+          designAnalysis,
+          layout: synthLayout,
         });
       } catch (e) {
         sendJson(res, 500, { error: 'synthesize failed: ' + e.message });

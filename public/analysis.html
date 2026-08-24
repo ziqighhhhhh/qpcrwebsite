@@ -193,6 +193,29 @@
   <div id="qcVerdict" class="verdict"></div>
 </section>
 
+<!-- 设计驱动模拟：真值 vs 实测 + ΔCt/ΔΔCt/Fold/统计 -->
+<section class="sim-summary" id="designReport" hidden>
+  <h2>设计驱动模拟 — 生物学真值 vs 实测结果（ΔCt / ΔΔCt / Fold Change / 统计）</h2>
+  <div class="compare-cards" id="designCards"></div>
+  <div id="designVerdict" class="verdict"></div>
+  <div class="stats-charts">
+    <div class="chart-box">
+      <h3>各组 ΔCt（样本均值 ± SD）</h3>
+      <canvas id="designDctChart" width="420" height="240"></canvas>
+      <div class="hint">ΔCt = 目的基因 Cq 均值 − 内参基因 Cq 均值（每个生物学样本一个点）</div>
+    </div>
+    <div class="chart-box">
+      <h3>相对表达量（对照=1）</h3>
+      <canvas id="designFoldChart" width="420" height="240"></canvas>
+      <div class="hint">柱 = 设计真值；圆点 = 引擎实测 Fold Change（2<sup>−ΔΔCt</sup>）</div>
+    </div>
+    <div class="chart-box wide">
+      <h3>ΔΔCt 明细（真值 vs 实测）<button id="btnDesignCsv" class="btn" style="padding:2px 8px;font-size:11px">导出 CSV</button></h3>
+      <div class="table-wrap short" style="max-height:240px"><table class="table" id="designTable"><thead></thead><tbody></tbody></table></div>
+    </div>
+  </div>
+</section>
+
 <script src="/static/chart.js"></script>
 <script src="/static/app.js"></script>
 </body>

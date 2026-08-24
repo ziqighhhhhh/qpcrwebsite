@@ -162,11 +162,94 @@ input::placeholder{color:#a9b2c4}
       </div>
 
       <div class="section">
-        <h3>导出 / 下一步</h3>
-        <button id="exportBtn" style="width:100%" class="primary">导出 CSV（Well, Target Name, Simple Name）</button>
-        <div class="tiny" style="margin-top:6px">仅导出已命名的孔位，按 A1 → H12 顺序排列。</div>
-        <a id="goAnalysis" href="/analysis.html" class="primary" style="width:100%;margin-top:10px">保存并进入数据分析 →</a>
-        <div class="tiny" style="margin-top:6px">命名保存在服务器 <code>data/layout.json</code>，进入数据分析页后按孔位叠加显示在热图与结果表中，并随导出包含 Target / Simple 列。</div>
+        <h3>模拟实验设计（qPCR 核心条件）</h3>
+        <div class="tiny" style="margin-bottom:8px">在面板中设定实验条件，系统将<b>自动反推</b>理论表达量、初始模板量、预期 Cq 差异与 PCR 扩增效率，并按<b>生物学真值 → 技术误差 → 原始数据 → 真实分析流程（ΔCt/ΔΔCt/Fold/统计）</b>生成一套内部自洽的模拟实验数据。进入数据分析页后自动合成并经原版引擎分析。</div>
+
+        <div class="field">
+          <label>实验组别</label>
+          <div style="display:flex;gap:8px">
+            <select id="dsGroups" style="width:96px;height:42px;border:1px solid var(--line);border-radius:var(--r-md);padding:0 10px;font-size:13.5px;background:#fff;color:var(--text)">
+              <option value="2">2 组</option>
+              <option value="3">3 组</option>
+              <option value="4">4 组</option>
+            </select>
+            <div id="dsGroupNames" style="flex:1;display:grid;gap:6px"></div>
+          </div>
+          <div class="tiny" id="dsGroupHint">第 1 组为对照组（基线），其余为处理组；组名可编辑，展示于板面与导出。</div>
+        </div>
+
+        <div class="row">
+          <div class="field">
+            <label>生物学重复数</label>
+            <input type="number" id="dsBio" min="1" max="8" step="1" value="3">
+            <div class="tiny">每组独立生物样本数（1–8）</div>
+          </div>
+          <div class="field">
+            <label>技术重复数</label>
+            <input type="number" id="dsTech" min="1" max="3" step="1" value="3">
+            <div class="tiny">每样本复孔数（1–3）</div>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field">
+            <label>目的基因</label>
+            <input type="text" id="dsTarget" value="IL6" maxlength="40" placeholder="例：IL6">
+          </div>
+          <div class="field">
+            <label>内参基因</label>
+            <input type="text" id="dsRef" value="GAPDH" maxlength="40" placeholder="例：GAPDH">
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field">
+            <label>预期表达变化幅度（倍数）</label>
+            <input type="number" id="dsFold" min="1.5" max="20" step="0.5" value="4">
+            <div class="tiny">处理组 vs 对照组（1.5–20）</div>
+          </div>
+          <div class="field">
+            <label>表达方向</label>
+            <select id="dsDir" style="width:100%;height:42px;border:1px solid var(--line);border-radius:var(--r-md);padding:0 12px;font-size:13.5px;background:#fff;color:var(--text)">
+              <option value="up">上调（表达升高）</option>
+              <option value="down">下调（表达降低）</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>实验质量等级</label>
+          <select id="dsQuality" style="width:100%;height:42px;border:1px solid var(--line);border-radius:var(--r-md);padding:0 12px;font-size:13.5px;background:#fff;color:var(--text)">
+            <option value="excellent">优 — 高精度（变异小、无异常孔）</option>
+            <option value="good" selected>良 — 常规实验（推荐）</option>
+            <option value="fair">中 — 变异偏大、偶见异常孔</option>
+            <option value="poor">差 — 变异大、异常孔多、效率低</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>随机种子（可选，可复现）</label>
+          <input type="number" id="dsSeed" step="1" placeholder="留空 = 随机">
+        </div>
+
+        <div style="background:#f6f8fd;border:1px solid var(--line-2);border-radius:var(--r-md);padding:10px 12px;margin-top:6px">
+          <div style="font-size:12px;font-weight:700;color:#2a3852;margin-bottom:6px">系统自动推导 <span id="dsQualityLabel" style="font-weight:400;color:var(--muted)"></span></div>
+          <div class="tiny" style="margin:0;line-height:1.9">
+            <div>理论表达量（对照=1）：对照 <b id="dvCtrlExpr">1.00</b> × ｜ 处理 <b id="dvTreatExpr">4.00</b> × ｜ 内参 <b id="dvRefExpr">1.00</b> ×</div>
+            <div>初始模板量（拷贝/反应）：对照 <b id="dvCtrlCopies">1,000,000</b> ｜ 处理 <b id="dvTreatCopies">—</b> ｜ 内参 <b id="dvRefCopies">—</b></div>
+            <div>预期 Cq 差异：ΔCq ≈ <b id="dvDeltaCq">2.02</b>（处理组 Cq ≈ <b id="dvTreatCq">17.98</b>）</div>
+            <div>PCR 扩增效率：≈ <b id="dvEff">97</b> %</div>
+            <div>总孔数：<b id="dvTotal">—</b> <span id="dvTotalWarn" style="color:var(--danger)"></span></div>
+          </div>
+        </div>
+
+        <div class="tiny" id="bioModeHint" style="margin-top:6px"></div>
+      </div>
+
+      <div class="section">
+        <h3>下一步</h3>
+        <a id="goAnalysis" href="/analysis.html?from=layout" class="primary" style="width:100%">保存并按设计生成模拟实验 →</a>
+        <div class="tiny" style="margin-top:6px">设计保存在服务器 <code>data/layout.json</code>，进入数据分析页后<b>按实验设计自动布板、合成模拟数据并经原版引擎分析</b>；随后按真实 qPCR 流程给出 ΔCt / ΔΔCt / Fold Change 与统计结果（含"真值 vs 实测"对照）。未命名孔留空，含 NTC/无模板 → 阴性对照；含 GAPDH/内参 → 稳定内参；simple 含 con/ctrl/对照 → 对照组，其余 → 处理组。</div>
       </div>
     </div>
   </div>
@@ -193,9 +276,99 @@ const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&
 const wellId=i=>rows[Math.floor(i/12)]+(i%12+1);
 
 // ---------------- 后端同步 ----------------
-const saveStatusEl=$("saveStatus");
-let saveTimer=null;
-function setSaveStatus(text,cls){saveStatusEl.textContent=text;saveStatusEl.className="save-status"+(cls?" "+cls:"");}
+const saveStatusEl = $("saveStatus");
+let saveTimer = null;
+function setSaveStatus(text, cls){saveStatusEl.textContent=text;saveStatusEl.className="save-status"+(cls?" "+cls:"");}
+
+// ---------------- 实验设计面板（qPCR 核心条件） ----------------
+const QUALITY_LABELS={excellent:"优",good:"良",fair:"中",poor:"差"};
+let dsGroupCount=2;
+function dsGroupNamesHtml(){
+  const names=Array.from({length:dsGroupCount},(_,i)=>{
+    const def=i===0?"对照组":("处理组"+(i>1?i:""));
+    return `<input type="text" id="dsGName${i}" data-g="${i}" value="" placeholder="${def}" maxlength="40" style="height:34px">`;
+  }).join("");
+  return names;
+}
+function dsRenderGroups(){
+  // 切换组别数前保留已输入的组名
+  const prev=[];
+  document.querySelectorAll("#dsGroupNames input").forEach(inp=>{ prev[parseInt(inp.dataset.g,10)]=inp.value; });
+  $("dsGroupNames").innerHTML=dsGroupNamesHtml();
+  prev.forEach((v,i)=>{ const inp=document.getElementById("dsGName"+i); if(inp&&v)inp.value=v; });
+  // 组名输入即时触发推导
+  document.querySelectorAll("#dsGroupNames input").forEach(inp=>{
+    inp.addEventListener("input",()=>{dsPersist();dsDerive();});
+  });
+  dsDerive();
+}
+function dsCollect(){
+  const groups=[];
+  for(let i=0;i<dsGroupCount;i++){
+    const inp=document.getElementById("dsGName"+i);
+    const name=(inp&&inp.value.trim())||(i===0?"对照组":("处理组"+(i>1?i:"")));
+    groups.push({name,role:i===0?"control":"treatment"});
+  }
+  return {
+    groups,
+    bioReps:parseInt($("dsBio").value,10)||3,
+    techReps:parseInt($("dsTech").value,10)||3,
+    targetGene:$("dsTarget").value.trim()||"IL6",
+    refGene:$("dsRef").value.trim()||"GAPDH",
+    foldChange:parseFloat($("dsFold").value)||4,
+    direction:$("dsDir").value,
+    quality:$("dsQuality").value,
+    seed:$("dsSeed").value.trim()===""?null:parseInt($("dsSeed").value,10),
+  };
+}
+function dsFill(design){
+  if(!design) return;
+  if(design.groups&&design.groups.length>=2){
+    dsGroupCount=Math.min(4,design.groups.length);
+    $("dsGroups").value=String(dsGroupCount);
+  }
+  if(design.bioReps)$("dsBio").value=design.bioReps;
+  if(design.techReps)$("dsTech").value=design.techReps;
+  if(design.targetGene)$("dsTarget").value=design.targetGene;
+  if(design.refGene)$("dsRef").value=design.refGene;
+  if(design.foldChange)$("dsFold").value=design.foldChange;
+  if(design.direction)$("dsDir").value=design.direction;
+  if(design.quality&&QUALITY_LABELS[design.quality])$("dsQuality").value=design.quality;
+  if(design.seed)$("dsSeed").value=design.seed;
+  dsRenderGroups();
+  // 组名回填
+  if(design.groups)design.groups.forEach((g,i)=>{
+    const inp=document.getElementById("dsGName"+i);
+    if(inp&&g&&g.name)inp.value=g.name;
+  });
+}
+// 实时调用 /api/derive 展示系统自动推导结果
+let deriveTimer=null;
+function dsDerive(){
+  clearTimeout(deriveTimer);
+  deriveTimer=setTimeout(async()=>{
+    try{
+      const r=await fetch("/api/derive",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({design:dsCollect()})});
+      const j=await r.json();
+      if(!r.ok)throw new Error(j.error||"derive failed");
+      $("dsQualityLabel").textContent="· 质量等级："+QUALITY_LABELS[j.design.quality]+"（"+j.quality.label+"）";
+      $("dvCtrlExpr").textContent=Number(j.theoreticalExpression.control).toFixed(2);
+      $("dvTreatExpr").textContent=Number(j.theoreticalExpression.treatment).toFixed(2);
+      $("dvRefExpr").textContent=Number(j.theoreticalExpression.ref).toFixed(2);
+      $("dvCtrlCopies").textContent=Number(j.templateCopies.control).toLocaleString();
+      $("dvTreatCopies").textContent=Number(j.templateCopies.treatment).toLocaleString();
+      $("dvRefCopies").textContent=Number(j.templateCopies.ref).toLocaleString();
+      $("dvDeltaCq").textContent=Number(j.deltaCq).toFixed(2);
+      $("dvTreatCq").textContent=Number(j.treatCq).toFixed(2);
+      $("dvEff").textContent=j.efficiencyPct;
+      $("dvTotal").textContent=j.totalWells+" 孔";
+      $("dvTotalWarn").textContent=(j.issues&&j.issues.length)?j.issues.join("；"):"";
+      $("bioModeHint").textContent=(j.issues&&j.issues.length)?"⚠ "+j.issues.join("；"):"推导完成 — 进入数据分析页后将按此设计合成并经原版引擎分析。";
+    }catch(e){ /* 后端未就绪时忽略 */ }
+  },250);
+}
+function dsPersist(){persist();}
+
 function collectWells(){
   const out={};
   data.forEach((d,i)=>{ if(d&&(d.target||d.simple)) out[wellId(i)]={target:d.target||"",simple:d.simple||""}; });
@@ -206,7 +379,7 @@ function persist(){
   saveTimer=setTimeout(async()=>{
     setSaveStatus("保存中…");
     try{
-      const r=await fetch("/api/layout",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({wells:collectWells()})});
+      const r=await fetch("/api/layout",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({wells:collectWells(),design:dsCollect()})});
       const j=await r.json();
       if(!r.ok) throw new Error(j.error||("HTTP "+r.status));
       setSaveStatus("已保存 "+new Date().toLocaleTimeString(),"ok");
@@ -225,9 +398,20 @@ fetch("/api/layout").then(r=>r.json()).then(j=>{
     if(v&&(v.target||v.simple)) data[i]={target:v.target||"",simple:v.simple||""};
   });
   const n=Object.keys(w).length;
+  if(j.design) dsFill(j.design); else dsRenderGroups();
   setSaveStatus("已载入后端布局 · "+n+" 孔命名"+(n?"":"（空板）"),"ok");
   render();
-}).catch(()=>{ setSaveStatus("后端未连接 — 仅本地使用","err"); render(); });
+}).catch(()=>{ setSaveStatus("后端未连接 — 仅本地使用","err"); dsRenderGroups(); render(); });
+
+// 设计面板事件：任何改动 → 重推推导 + 保存
+["dsGroups","dsBio","dsTech","dsTarget","dsRef","dsFold","dsDir","dsQuality","dsSeed"].forEach(id=>{
+  const el=$(id); if(!el) return;
+  el.addEventListener("input",()=>{
+    if(id==="dsGroups"){ dsGroupCount=parseInt(el.value,10)||2; dsRenderGroups(); }
+    dsPersist(); dsDerive();
+  });
+  el.addEventListener("change",()=>{ dsPersist(); dsDerive(); });
+});
 
 // ---------------- 96 孔板 ----------------
 function makePlate(){
@@ -368,22 +552,6 @@ $("clearAllBtn").onclick=()=>{
   selSet.clear();
   $("targetInput").value="";$("simpleInput").value="";
   render();persist();
-};
-
-$("exportBtn").onclick=()=>{
-  const csvCell=v=>/[,"]/.test(v)?`"${v.replace(/"/g,'""')}"`:v;
-  const lines=["Well,Target Name,Simple Name"];
-  data.forEach((d,i)=>{
-    if(!d||(!d.target&&!d.simple))return;
-    lines.push(`${csvCell(wellId(i))},${csvCell(d.target||"")},${csvCell(d.simple||"")}`);
-  });
-  if(lines.length===1){alert("还没有任何命名孔可导出。");return;}
-  const blob=new Blob(["\ufeff"+lines.join("\r\n")],{type:"text/csv;charset=utf-8"});
-  const a=document.createElement("a");
-  a.href=URL.createObjectURL(blob);
-  a.download="qpcr_96well_names.csv";
-  a.click();
-  URL.revokeObjectURL(a.href);
 };
 
 makePlate();

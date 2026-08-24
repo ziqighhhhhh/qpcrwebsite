@@ -8,6 +8,9 @@ const state = {
   left: null,          // treatment experiment
   right: null,         // control experiment
   layout: {},          // 96-well naming layout from the entry page: { "A1": {target, simple} }
+  bioMode: 'ideal',    // biology mode picked on the naming page (ideal/ic-drift/ntc-dimer/weak/high-cv)
+  design: null,        // experiment design from the naming page (qPCR 核心条件面板)
+  designReport: null,  // design-driven analysis result (ΔCt/ΔΔCt/Fold/stats + truth vs measured)
   selectedWell: null,
   channel: 0,
   metric: 'Call',
@@ -42,6 +45,9 @@ const E = {
   synMelt: $('synMelt'), synSeed: $('synSeed'),
   synTotal: $('synTotal'), synIssues: $('synIssues'), synGo: $('synGo'),
   qcReport: $('qcReport'), qcCards: $('qcCards'), qcVerdict: $('qcVerdict'),
+  designReport: $('designReport'), designCards: $('designCards'), designVerdict: $('designVerdict'),
+  designDctChart: $('designDctChart'), designFoldChart: $('designFoldChart'),
+  designTable: $('designTable'), btnDesignCsv: $('btnDesignCsv'),
   btnIcGene: $('btnIcGene'), icModal: $('icModal'), icClose: $('icClose'),
   icGeneName: $('icGeneName'), icClear: $('icClear'), icRowA: $('icRowA'), icRowB: $('icRowB'), icFirst8: $('icFirst8'),
   icPlate: $('icPlate'), icCount: $('icCount'), icIssues: $('icIssues'), icSave: $('icSave'),
@@ -435,6 +441,316 @@ async function onSimulate() {
   E.btnSimulate.disabled = false;
 }
 
+// ---------------- auto layout-driven synthesis ----------------
+// Arriving from the naming page with ?from=layout: no manual upload or panel
+// needed — synthesize an experiment that follows the naming plate, run it
+// through the real engine, render everything + QC report automatically.
+function wantsLayoutSynthesis() {
+  return new URLSearchParams(location.search).get('from') === 'layout';
+}
+
+function namedLayoutCount() {
+  return Object.keys(state.layout).filter(k => {
+    const v = state.layout[k];
+    return v && (v.target || v.simple);
+  }).length;
+}
+
+const BIO_MODE_LABELS = {
+  ideal: '理想实验', 'ic-drift': '内参漂移', 'ntc-dimer': 'NTC 二聚体', weak: '低表达弱扩增', 'high-cv': '高生物学变异',
+};
+
+async function onAutoLayoutSynthesis() {
+  // 设计驱动：命名页实验设计面板设定的 qPCR 核心条件
+  if (state.design) return onDesignSynthesis();
+  const nNamed = namedLayoutCount();
+  if (!nNamed) { setStatus('来自孔板命名页，但板面尚无命名孔 — 请先返回「孔板命名」页设计板面', 'err'); return; }
+  E.btnAnalyze.disabled = true; E.btnSimulate.disabled = true;
+  setStatus('检测到命名板面（' + nNamed + ' 孔）— 正在按板面合成模拟实验并经原版引擎分析（约 5-15 秒）…');
+  const payload = {
+    layout: state.layout,   // drives well roles: empty/NTC/IC/Control/Treatment
+    bioMode: state.bioMode || 'ideal',
+    groups: parseInt(E.synGroups.value, 10),
+    samplesPerGroup: parseInt(E.synSamples.value, 10),
+    replicates: parseInt(E.synReps.value, 10),
+    foldChange: parseFloat(E.synFold.value),
+    direction: E.synDirection.value,
+    bioCv: parseFloat(E.synBioCv.value),
+    techSd: parseFloat(E.synTechSd.value),
+    efficiency: parseFloat(E.synEff.value),
+    ctBase: parseFloat(E.synCtBase.value),
+    noiseLevel: parseInt(E.synNoise.value, 10),
+    meltPeaks: parseInt(E.synMelt.value, 10),
+    includeIc: E.synIc.checked,
+  };
+  const seed = E.synSeed.value.trim();
+  if (seed !== '' && !isNaN(parseInt(seed, 10))) payload.seed = parseInt(seed, 10);
+  try {
+    const r = await fetch('/api/synthesize', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    const res = await r.json();
+    if (!r.ok) throw new Error(res.error || 'synthesize failed');
+    state.left = await getJSON('/api/experiment');
+    state.right = null;
+    state.selectedWell = null; state.compare = new Set(); state.channel = 0;
+    renderAll();
+    E.btnAnalyze.disabled = false;
+    E.btnIcGene.disabled = false;
+    E.btnSimulate.disabled = false;
+    E.btnExport.disabled = false;
+    E.simResult.hidden = true;
+    renderQC(state.left, res.params);
+    E.qcReport.hidden = false;
+    const by = (res.params && res.params.byRole) || {};
+    const mode = BIO_MODE_LABELS[state.bioMode] || state.bioMode;
+    setStatus('已按命名板面生成模拟实验并完成真实引擎分析（模式：' + mode + '）：' + state.left.curves.length + ' 条曲线 — 对照 ' + (by.control || 0) + ' / 处理 ' + (by.treatment || 0) + ' / 内参 ' + (by.ic || 0) + ' / NTC ' + (by.ntc || 0) + ' 孔，QC 报告见下方', 'ok');
+  } catch (e) {
+    setStatus('按板面生成失败: ' + e.message, 'err');
+    E.btnAnalyze.disabled = false; E.btnSimulate.disabled = false;
+  }
+}
+
+// ---------------- design-driven synthesis (实验设计面板 → 合成 → 真实分析) ----------------
+async function onDesignSynthesis() {
+  const d = state.design;
+  E.btnAnalyze.disabled = true; E.btnSimulate.disabled = true;
+  setStatus('检测到实验设计（' + d.groups.length + ' 组 × ' + d.bioReps + ' 生物学重复 × ' + d.techReps + ' 技术重复）— 正在按设计合成模拟数据并经原版引擎分析（约 5-15 秒）…');
+  try {
+    const r = await fetch('/api/synthesize', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ design: d }),
+    });
+    const res = await r.json();
+    if (!r.ok) throw new Error(res.error || 'synthesize failed');
+    state.left = await getJSON('/api/experiment');
+    state.right = null;
+    state.selectedWell = null; state.compare = new Set(); state.channel = 0;
+    // 设计驱动的自动布板覆盖命名视图（真值/基因/样本名叠加显示）
+    if (res.layout) state.layout = res.layout;
+    renderAll();
+    E.btnAnalyze.disabled = false;
+    E.btnIcGene.disabled = false;
+    E.btnSimulate.disabled = false;
+    E.btnExport.disabled = false;
+    E.simResult.hidden = true;
+    renderQC(state.left, res.derived, res.derived);
+    E.qcReport.hidden = false;
+    // 设计分析报告（真值 vs 实测 + ΔCt/ΔΔCt/Fold/统计）
+    if (res.designAnalysis) {
+      state.designReport = { analysis: res.designAnalysis, derived: res.derived, design: res.design, layout: res.layout };
+      renderDesignReport(state.designReport);
+      E.designReport.hidden = false;
+    } else {
+      E.designReport.hidden = true;
+    }
+    const q = (res.derived && res.derived.quality) || {};
+    setStatus('已按实验设计生成模拟实验并完成真实引擎分析：' + state.left.curves.length + ' 条曲线 — 质量等级 ' + (q.label || '') + '，ΔCt/ΔΔCt/Fold/统计结果见下方（真值 vs 实测）', 'ok');
+  } catch (e) {
+    setStatus('按设计生成失败: ' + e.message, 'err');
+    E.btnAnalyze.disabled = false; E.btnSimulate.disabled = false;
+  }
+}
+
+// 设计报告：卡片 + ΔCt 柱状图 + Fold 对比图 + ΔΔCt 明细表
+function renderDesignReport(report) {
+  const an = report.analysis, der = report.derived;
+  const ctrl = an.control || {};
+  const fmt = (v, d) => (v === null || v === undefined || isNaN(v)) ? '—' : (Math.round(v * Math.pow(10, d || 2)) / Math.pow(10, d || 2)).toString();
+  const pText = (p) => (p === null || p === undefined || isNaN(p)) ? '—' : (p < 0.001 ? p.toExponential(2) : p.toFixed(4));
+  const cards = [
+    ['设计条件', (report.design && report.design.groups || []).map(g => g.name).join(' / ') + ' · ' + der.bioReps + '×' + der.techReps + ' 重复'],
+    ['目的 / 内参基因', (report.design && report.design.targetGene) + ' / ' + (report.design && report.design.refGene)],
+    ['预期倍数（设计真值）', (report.design && report.design.foldChange) + '× ' + (report.design && report.design.direction === 'up' ? '上调' : '下调')],
+    ['PCR 扩增效率（推导）', der.efficiencyPct + '%'],
+    ['预期 Cq 差异（推导）', 'ΔCq ≈ ' + fmt(der.deltaCq) + '（处理组 Cq ≈ ' + fmt(der.treatCq) + '）'],
+  ];
+  for (const t of an.treatments || []) {
+    cards.push([t.name + ' ΔCt', fmt(t.dCt) + ' ± ' + fmt(t.sd, 3) + '（n=' + t.n + '）'],
+      [t.name + ' ΔΔCt / Fold', 'ΔΔCt=' + fmt(t.ddCt) + ' → ' + fmt(t.fold) + '× <span class="' + (t.significant ? 'sig' : '') + '">' + (t.significant ? '*' : 'n.s.') + '</span>'],
+      [t.name + ' Welch t 检验', 'p = ' + pText(t.p) + ' · Cohen\'s d = ' + fmt(t.cohensD, 2)]);
+  }
+  const qc = an.qc || { abnormal: 0, ntcBad: 0 };
+  cards.push(['异常孔 / QC', '异常孔 ' + qc.abnormal + ' 孔 · NTC ' + (qc.ntcBad ? qc.ntcBad + ' 孔异常 ⚠' : '全部阴性 ✓')]);
+  E.designCards.innerHTML = cards.map(c =>
+    '<div class="ccard"><div class="k">' + c[0] + '</div><div class="v">' + c[1] + '</div></div>').join('');
+
+  // 结论
+  const verdicts = [];
+  for (const t of an.treatments || []) {
+    const expect = report.design.foldChange;
+    const got = t.fold;
+    // 下调设计按 1/fold 计偏差
+    const expV = report.design.direction === 'down' ? 1 / expect : expect;
+    const dev = got ? Math.abs(got - expV) / expV : 1;
+    const ok = t.significant && dev < 0.6;
+    const dirOk = t.significant && (expV > 1 ? got > 1 : got < 1); // 方向正确
+    verdicts.push('<b>' + t.name + '：</b>' + (ok
+      ? '实测 Fold ' + fmt(got) + '× 与设计 ' + fmt(expV) + '× 一致（偏差 ' + Math.round(dev * 100) + '%），差异显著'
+      : (t.significant && dirOk
+        ? '实测 Fold ' + fmt(got) + '× 方向与设计 ' + fmt(expV) + '× 一致但幅度偏差 ' + Math.round(dev * 100) + '%（n=' + t.n + ' 波动所致）'
+        : '实测 Fold ' + fmt(got) + '× 偏离设计 ' + fmt(expV) + '×（偏差 ' + Math.round(dev * 100) + '%）或未达显著 — 检查质量等级/重复数')));
+  }
+  if (qc.ntcBad) verdicts.push('<b>NTC 出现扩增信号 ⚠</b>（设计未开启污染，请检查）');
+  E.designVerdict.innerHTML = '<b>结论（真值 vs 实测）：</b>' + (verdicts.length ? verdicts.join('；') : '对照组基线正常，结果符合设计预期 ✓');
+
+  drawDesignDctChart(E.designDctChart, an);
+  drawDesignFoldChart(E.designFoldChart, an, report.design);
+  renderDesignTable(an, report);
+}
+
+function renderDesignTable(an, report) {
+  const fmt = (v, d) => (v === null || v === undefined || isNaN(v)) ? '—' : (Math.round(v * Math.pow(10, d || 2)) / Math.pow(10, d || 2)).toString();
+  const rows = [];
+  // 每生物样本一行
+  for (const key of Object.keys(an.samples || {})) {
+    const sm = an.samples[key];
+    rows.push({
+      sample: sm.name, group: sm.group, dCt: sm.dCt, designed: sm.designedDct,
+      targetCq: sm.targetCq, refCq: sm.refCq, n: (sm.wells || []).length,
+    });
+  }
+  rows.sort((a, b) => (a.group === b.group ? a.sample.localeCompare(b.sample) : a.group.localeCompare(b.group)));
+  const thead = '<tr><th class="l">样本</th><th class="l">组别</th><th>设计真值 ΔCt</th><th>实测 ΔCt</th><th>目的基因 Cq(均值)</th><th>内参 Cq(均值)</th><th>孔数</th></tr>';
+  E.designTable.querySelector('thead').innerHTML = thead;
+  E.designTable.querySelector('tbody').innerHTML = rows.map(r =>
+    '<tr><td class="l">' + r.sample + '</td><td class="l">' + r.group + '</td><td>' + fmt(r.designed, 3) + '</td><td>' + fmt(r.dCt, 3) + '</td><td>' + fmt(r.targetCq, 2) + '</td><td>' + fmt(r.refCq, 2) + '</td><td>' + r.n + '</td></tr>').join('')
+    || '<tr><td colspan="7" class="l">无可用样本（引擎未检出 Positive 孔）</td></tr>';
+  // 组汇总行
+  const sumRows = (an.groups || []).map(g =>
+    '<tr style="background:#1c2740;font-weight:700"><td class="l" colspan="2">' + g.name + '（n=' + g.n + '）</td><td>' + fmt(g.designedDct, 3) + '</td><td>' + fmt(g.dCt, 3) + ' ± ' + fmt(g.sd, 3) + '</td><td colspan="3" class="l">' + (g.role === 'control' ? '对照组' : '处理组') + '</td></tr>').join('');
+  E.designTable.querySelector('tbody').insertAdjacentHTML('beforeend', sumRows);
+  E.btnDesignCsv.onclick = () => {
+    const head = 'Sample,Group,DesignedDeltaCt,MeasuredDeltaCt,TargetCqMean,RefCqMean,Wells';
+    const lines = [head].concat(rows.map(r => [r.sample, r.group, fmt(r.designed, 4), fmt(r.dCt, 4), fmt(r.targetCq, 3), fmt(r.refCq, 3), r.n].join(',')));
+    const csv = lines.join('\r\n');
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'design_ddct_table.csv';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+}
+
+// 各组 ΔCt 柱状图（均值 ± SD，圆点为样本级 ΔCt）
+function drawDesignDctChart(canvas, an) {
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth || 420, cssH = 240;
+  canvas.style.width = cssW + 'px'; canvas.style.height = cssH + 'px';
+  canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+  const pad = { l: 46, r: 16, t: 18, b: 30 };
+  const iw = cssW - pad.l - pad.r, ih = cssH - pad.t - pad.b;
+  const groups = an.groups || [];
+  if (!groups.length) return;
+  // 样本级 ΔCt 收集（画散点）
+  const byGroup = {};
+  for (const key of Object.keys(an.samples || {})) {
+    const sm = an.samples[key];
+    if (sm.dCt === null) continue;
+    (byGroup[sm.group] = byGroup[sm.group] || []).push(sm.dCt);
+  }
+  let lo = Infinity, hi = -Infinity;
+  groups.forEach(g => {
+    const vs = byGroup[g.name] || [];
+    vs.forEach(v => { if (v < lo) lo = v; if (v > hi) hi = v; });
+    if (g.dCt !== null) { if (g.dCt < lo) lo = g.dCt; if (g.dCt > hi) hi = g.dCt; }
+    if (g.dCt !== null && g.sd) { if (g.dCt - g.sd < lo) lo = g.dCt - g.sd; if (g.dCt + g.sd > hi) hi = g.dCt + g.sd; }
+  });
+  if (!isFinite(lo) || !isFinite(hi)) { lo = 0; hi = 10; }
+  const rng = hi - lo || 1; lo -= rng * 0.1; hi += rng * 0.1;
+  const sy = v => pad.t + ih - (v - lo) / (hi - lo) * ih;
+  ctx.strokeStyle = '#26304a'; ctx.fillStyle = '#6c82a6'; ctx.font = '11px sans-serif'; ctx.lineWidth = 1;
+  for (let i = 0; i <= 5; i++) {
+    const v = lo + (hi - lo) * i / 5, Y = sy(v);
+    ctx.beginPath(); ctx.moveTo(pad.l, Y); ctx.lineTo(pad.l + iw, Y); ctx.stroke();
+    ctx.textAlign = 'right'; ctx.fillText(Math.round(v * 10) / 10, pad.l - 6, Y + 4);
+  }
+  ctx.fillStyle = '#9db4d8'; ctx.textAlign = 'center'; ctx.font = '11px sans-serif';
+  ctx.fillText('ΔCt（目的基因 Cq − 内参基因 Cq）', pad.l + iw / 2, cssH - 8);
+  const colors = ['#4da3ff', '#ff8d6b', '#7fe3a0', '#ffd166'];
+  groups.forEach((g, gi) => {
+    const x = pad.l + iw * (gi + 0.5) / groups.length;
+    const bw = Math.min(56, iw / groups.length * 0.5);
+    // 柱（组均值）
+    if (g.dCt !== null) {
+      const y0 = sy(Math.max(lo, 0)), y1 = sy(g.dCt);
+      ctx.fillStyle = colors[gi % colors.length];
+      ctx.fillRect(x - bw / 2, Math.min(y0, y1), bw, Math.abs(y1 - y0));
+      // 误差棒
+      if (g.sd) {
+        ctx.strokeStyle = '#e6eefb'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(x, sy(g.dCt - g.sd)); ctx.lineTo(x, sy(g.dCt + g.sd)); ctx.stroke();
+        ctx.lineWidth = 1;
+      }
+      ctx.fillStyle = '#e6eefb'; ctx.textAlign = 'center'; ctx.font = 'bold 12px sans-serif';
+      ctx.fillText(Math.round(g.dCt * 100) / 100, x, sy(g.dCt) - 6);
+    }
+    // 样本散点
+    (byGroup[g.name] || []).forEach((v, i) => {
+      ctx.fillStyle = 'rgba(255,255,255,.75)';
+      ctx.beginPath(); ctx.arc(x + ((i % 7) - 3) * 3.5, sy(v), 2.6, 0, Math.PI * 2); ctx.fill();
+    });
+    ctx.fillStyle = '#9db4d8'; ctx.font = '11px sans-serif';
+    ctx.fillText(g.name, x, cssH - 8);
+  });
+}
+
+// 相对表达量：设计真值柱 vs 实测 Fold 点
+function drawDesignFoldChart(canvas, an, design) {
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth || 420, cssH = 240;
+  canvas.style.width = cssW + 'px'; canvas.style.height = cssH + 'px';
+  canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+  const pad = { l: 52, r: 16, t: 18, b: 30 };
+  const iw = cssW - pad.l - pad.r, ih = cssH - pad.t - pad.b;
+  const treatments = an.treatments || [];
+  const names = ['对照'].concat(treatments.map(t => t.name));
+  const designFolds = [1].concat(treatments.map(t => (design.foldChange * (design.direction === 'down' ? 0 : 1)) || design.foldChange));
+  const measured = [1].concat(treatments.map(t => t.fold));
+  let hi = Math.max(1, ...designFolds, ...measured.filter(v => v !== null && isFinite(v))) * 1.15;
+  if (!isFinite(hi) || hi <= 0) hi = 1;
+  const lo = 0;
+  const sy = v => pad.t + ih - (v - lo) / (hi - lo) * ih;
+  ctx.strokeStyle = '#26304a'; ctx.fillStyle = '#6c82a6'; ctx.font = '11px sans-serif'; ctx.lineWidth = 1;
+  for (let i = 0; i <= 5; i++) {
+    const v = lo + (hi - lo) * i / 5, Y = sy(v);
+    ctx.beginPath(); ctx.moveTo(pad.l, Y); ctx.lineTo(pad.l + iw, Y); ctx.stroke();
+    ctx.textAlign = 'right'; ctx.fillText(Math.round(v * 10) / 10, pad.l - 6, Y + 4);
+  }
+  ctx.fillStyle = '#9db4d8'; ctx.textAlign = 'center'; ctx.font = '11px sans-serif';
+  ctx.fillText('相对表达量（对照=1）', pad.l + iw / 2, cssH - 8);
+  const colors = ['#4da3ff', '#ff8d6b', '#7fe3a0', '#ffd166'];
+  names.forEach((n, i) => {
+    const x = pad.l + iw * (i + 0.5) / names.length;
+    const bw = Math.min(56, iw / names.length * 0.5);
+    const dF = designFolds[i];
+    // 设计真值柱
+    ctx.fillStyle = colors[i % colors.length] + '55';
+    ctx.fillRect(x - bw / 2, sy(dF), bw, ih - (sy(dF) - pad.t));
+    ctx.fillStyle = colors[i % colors.length];
+    ctx.fillRect(x - bw / 2, sy(dF), bw, 2);
+    // 实测点
+    const mF = measured[i];
+    if (mF !== null && isFinite(mF)) {
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(x, sy(mF), 4.5, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = colors[i % colors.length]; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, sy(mF), 4.5, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = '#e6eefb'; ctx.textAlign = 'center'; ctx.font = 'bold 11px sans-serif';
+      ctx.fillText(Math.round(mF * 100) / 100, x, sy(mF) - 8);
+    }
+    ctx.fillStyle = '#9db4d8'; ctx.font = '11px sans-serif';
+    ctx.fillText(n, x, cssH - 8);
+  });
+}
+
 // ---------------- student simulation (synthetic experiment) ----------------
 const SYN_LIMITS = {
   groups: { min: 2, max: 4 }, samplesPerGroup: { min: 1, max: 8 }, replicates: { min: 1, max: 3 },
@@ -519,7 +835,7 @@ async function onSynthesize() {
 }
 
 // QC report: replicate SD, NTC, IC stability, group significance
-function renderQC(exp, params) {
+function renderQC(exp, params, derived) {
   const cards = [];
   const ok = (v) => '<span class="v sig">' + v + '</span>';
   const warn = (v) => '<span class="v" style="color:#ffcc33">' + v + '</span>';
@@ -536,19 +852,24 @@ function renderQC(exp, params) {
     (groups[key] = groups[key] || []).push(w.id);
   }
   // 1) technical replicate SD per sample (all unknown samples, not just control)
+  //    设计驱动模式：同一生物样本的靶基因孔与内参基因孔 Cq 不同，须按 (样本, 基因) 分组
+  const synth = (exp.analysis && exp.analysis.synthetic) || null;
+  const isDesign = !!(synth && synth.design && synth.design.refGene);
+  const truthMap = (synth && synth.truth) || {};
   const perSample = {};
   for (const w of exp.wells) {
     if (!w.sampleId || w.sampleType !== 'unkn') continue;
     const c = cqOf(w.id, 'SYBR Green I');
     if (c === null) continue;
-    const name = w.sampleName || ('S' + w.id);
+    const gene = isDesign ? (truthMap[w.id] && truthMap[w.id].gene) : null;
+    const name = (w.sampleName || ('S' + w.id)) + (gene ? '@' + gene : '');
     (perSample[name] = perSample[name] || []).push(c);
   }
   const sds = Object.values(perSample).filter(a => a.length > 1)
     .map(a => { const m = a.reduce((x, y) => x + y, 0) / a.length; return Math.sqrt(a.reduce((x, y) => x + (y - m) ** 2, 0) / (a.length - 1)); });
   const sdMean = sds.length ? sds.reduce((a, b) => a + b, 0) / sds.length : null;
   const sdMax = sds.length ? Math.max(...sds) : null;
-  const sdNote = params ? '（设定 SD ' + params.techSd + '）' : '';
+  const sdNote = params && params.techSd !== undefined ? '（设定 SD ' + params.techSd + '）' : '';
   const sdTxt = sdMean === null ? '—' : (sdMean < 0.5 ? ok(sdMean.toFixed(3)) : warn(sdMean.toFixed(3) + ' ⚠ 偏高'));
   cards.push(['复孔 SD（样本内，' + sds.length + ' 样本）', sdTxt + (sdMax !== null && sdMax >= 1 ? '，最大 ' + sdMax.toFixed(3) + ' ⚠' : ''), '技术重复稳定性' + sdNote]);
   // 2) NTC
@@ -559,15 +880,25 @@ function renderQC(exp, params) {
     if (!c || c['11 Intermediate Call'] !== 'Negative') ntcAllNeg = false;
   }
   cards.push(['NTC 无扩增', ntcIds.length ? (ntcAllNeg ? ok('✓ 全部 Negative') : bad('✗ 出现非 Negative')) : '未设置', '阴性对照 ' + ntcIds.length + ' 孔']);
-  // 3) IC stability (Yellow555)
-  const icWells = exp.wells.filter(w => w.sampleId && exp.computed[w.id + '|Yellow555']);
+  // 3) IC stability — 设计驱动模式：内参基因是 SYBR 通道独立孔（refGene），
+  //    计算其 Cq 稳定性；旧模式：Yellow555 探针通道。
+  let icWells = [];
+  if (isDesign) {
+    const refGene = synth.design.refGene;
+    const truth = synth.truth || {};
+    icWells = exp.wells.filter(w => w.sampleId && truth[w.id] && truth[w.id].gene === refGene);
+  } else {
+    icWells = exp.wells.filter(w => w.sampleId && exp.computed[w.id + '|Yellow555']);
+  }
   if (icWells.length) {
-    const icCqs = icWells.map(w => cqOf(w.id, 'Yellow555')).filter(v => v !== null);
+    const icDye = isDesign ? 'SYBR Green I' : 'Yellow555';
+    const icCqs = icWells.map(w => cqOf(w.id, icDye)).filter(v => v !== null);
     const m = icCqs.reduce((a, b) => a + b, 0) / icCqs.length;
     const sd = icCqs.length > 1 ? Math.sqrt(icCqs.reduce((a, b) => a + (b - m) ** 2, 0) / (icCqs.length - 1)) : 0;
-    cards.push(['内参稳定性 (Yellow555)', sd < 0.5 ? ok('Cq ' + m.toFixed(2) + ' ± ' + sd.toFixed(3)) : warn('Cq ' + m.toFixed(2) + ' ± ' + sd.toFixed(3) + ' ⚠ 波动大'), icCqs.length + ' 孔']);
+    const icLabel = isDesign ? ('内参稳定性 (' + synth.design.refGene + ')') : '内参稳定性 (Yellow555)';
+    cards.push([icLabel, sd < 0.5 ? ok('Cq ' + m.toFixed(2) + ' ± ' + sd.toFixed(3)) : warn('Cq ' + m.toFixed(2) + ' ± ' + sd.toFixed(3) + ' ⚠ 波动大'), icCqs.length + ' 孔']);
   } else {
-    cards.push(['内参稳定性 (Yellow555)', '未设置', '—']);
+    cards.push(['内参稳定性', '未设置', '—']);
   }
   // 4) group significance: Control vs Treatment Cq
   const ctrlWells = (groups['Control'] || []);
@@ -593,7 +924,7 @@ function renderQC(exp, params) {
     '<div class="ccard"><div class="k">' + c[0] + '</div><div class="v">' + c[1] + '</div><div style="font-size:10px;color:#5c7399">' + c[2] + '</div></div>').join('');
   // verdict
   const ntcOk = ntcIds.length === 0 || ntcAllNeg;
-  const icOk = !icWells.length || (() => { const icCqs = icWells.map(w => cqOf(w.id, 'Yellow555')).filter(v => v !== null); if (icCqs.length < 2) return true; const m = icCqs.reduce((a, b) => a + b, 0) / icCqs.length; const sd = Math.sqrt(icCqs.reduce((a, b) => a + (b - m) ** 2, 0) / (icCqs.length - 1)); return sd < 0.5; })();
+  const icOk = !icWells.length || (() => { const icDye = isDesign ? 'SYBR Green I' : 'Yellow555'; const icCqs = icWells.map(w => cqOf(w.id, icDye)).filter(v => v !== null); if (icCqs.length < 2) return true; const m = icCqs.reduce((a, b) => a + b, 0) / icCqs.length; const sd = Math.sqrt(icCqs.reduce((a, b) => a + (b - m) ** 2, 0) / (icCqs.length - 1)); return sd < 0.5; })();
   const verdicts = [];
   if (sdMean !== null && sdMean >= 0.5) verdicts.push('复孔 SD 偏高');
   if (!ntcOk) verdicts.push('NTC 出现扩增信号');
@@ -1012,6 +1343,11 @@ function init() {
     fetch('/api/layout').then(r => r.json()).catch(() => ({ wells: {} })),
   ]).then(([s, lay]) => {
     state.layout = (lay && lay.wells) || {};
+    state.bioMode = (lay && lay.bioMode) || 'ideal';
+    state.design = (lay && lay.design) || null;
+    // full simulation entry: arrived from the naming page with ?from=layout —
+    // automatically synthesize from the naming plate, run the real engine, render + QC.
+    if (wantsLayoutSynthesis()) { onAutoLayoutSynthesis(); return; }
     if (s.experiment) {
       return getJSON('/api/experiment').then(exp => {
         state.left = exp;
