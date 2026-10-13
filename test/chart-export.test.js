@@ -1,0 +1,13 @@
+'use strict';
+const assert = require('assert');
+const { lineChartSvg } = require('../public/chart-export');
+const svg = lineChartSvg([{name:'A<&"', points:[{x:1,y:2},{x:2,y:4}], markers:[{x:1,y:2}]}], {markers:true,xLabel:'Cycle',yLabel:'Fluorescence'});
+assert(svg.startsWith('<svg'));
+assert(svg.includes('A&lt;&amp;&quot;'));
+assert(svg.includes('<polyline'));
+assert(svg.includes('<circle'));
+assert(!svg.includes('<image'));
+assert(!svg.includes('NaN'));
+assert.throws(() => lineChartSvg([], {}), /数据/);
+assert(!lineChartSvg([{points:[{x:1,y:2},{x:NaN,y:4}]}],{}).includes('NaN'));
+console.log('chart export checks passed');
