@@ -570,6 +570,11 @@ function renderDesignReport(report) {
       [t.name + ' ΔΔCt / Fold', 'ΔΔCt=' + fmt(t.ddCt) + ' → ' + fmt(t.fold) + '× <span class="' + (t.significant ? 'sig' : '') + '">' + (t.significant ? '*' : 'n.s.') + '</span>'],
       [t.name + ' Welch t 检验', 'p = ' + pText(t.p) + ' · Cohen\'s d = ' + fmt(t.cohensD, 2)]);
   }
+  for (const t of an.treatments || []) {
+    if (t.mannWhitney) cards.push(['Mann–Whitney U（生物学重复 ΔCt，双侧）',
+      'U = ' + fmt(t.mannWhitney.u) + ' · p = ' + pText(t.mannWhitney.p) +
+      ' · ' + (t.mannWhitney.method === 'exact' ? '精确置换' : '近似检验')]);
+  }
   const qc = an.qc || { abnormal: 0, ntcBad: 0 };
   cards.push(['异常孔 / QC', '异常孔 ' + qc.abnormal + ' 孔 · NTC ' + (qc.ntcBad ? qc.ntcBad + ' 孔异常 ⚠' : '全部阴性 ✓')]);
   E.designCards.innerHTML = cards.map(c =>
@@ -933,43 +938,7 @@ function renderQC(exp, params, derived) {
 }
 
 // Student-t two-tailed p-value (Numerical Recipes betai approximation)
-function approxTp(t, df) {
-  const x = df / (df + t * t);
-  const ib = (a, b, x) => {
-    const betacf = (a, b, x) => {
-      const MAXIT = 200, EPS = 3e-12, FPMIN = 1e-300;
-      const qab = a + b, qap = a + 1, qam = a - 1;
-      let c = 1, d = 1 - qab * x / qap;
-      if (Math.abs(d) < FPMIN) d = FPMIN;
-      d = 1 / d; let h = d;
-      for (let m = 1; m <= MAXIT; m++) {
-        const m2 = 2 * m;
-        let aa = m * (b - m) * x / ((qam + m2) * (a + m2));
-        d = 1 + aa * d; if (Math.abs(d) < FPMIN) d = FPMIN;
-        c = 1 + aa / c; if (Math.abs(c) < FPMIN) c = FPMIN;
-        d = 1 / d; h *= d * c;
-        aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
-        d = 1 + aa * d; if (Math.abs(d) < FPMIN) d = FPMIN;
-        c = 1 + aa / c; if (Math.abs(c) < FPMIN) c = FPMIN;
-        d = 1 / d; const del = d * c; h *= del;
-        if (Math.abs(del - 1) < EPS) break;
-      }
-      return h;
-    };
-    if (x <= 0) return 0;
-    if (x >= 1) return 1;
-    const bt = Math.exp(lgamma(a + b) - lgamma(a) - lgamma(b) + a * Math.log(x) + b * Math.log(1 - x));
-    return x < (a + 1) / (a + b + 2) ? bt * betacf(a, b, x) / a : 1 - bt * betacf(b, a, 1 - x) / b;
-  };
-  const lgamma = (x) => {
-    const cof = [76.18009172947146, -86.50532032941677, 24.01409824083091, -1.231739572450155, 0.1208650973866179e-2, -0.5395239384953e-5];
-    let y = x, tmp = x + 5.5; tmp -= (x + 0.5) * Math.log(tmp);
-    let ser = 1.000000000190015;
-    for (let j = 0; j < 6; j++) ser += cof[j] / ++y;
-    return -tmp + Math.log(2.5066282746310005 * ser / x);
-  };
-  return ib(df / 2, 0.5, x);
-}
+function approxTp(t, df) { return QpcrStats.twoTailedP(t, df); }
 
 function renderCompare(comp) {
   const fmt = (v, d) => (v === null || v === undefined || isNaN(v)) ? '—' : (Math.round(v * Math.pow(10, d || 2)) / Math.pow(10, d || 2)).toString();

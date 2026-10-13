@@ -1,10 +1,11 @@
-﻿'use strict';
+'use strict';
 // ---------------------------------------------------------------------------
 // Zero-dependency canvas line chart.
 // series: [{ name, color, points: [{x, y}], width, dash }]
 // ---------------------------------------------------------------------------
 function drawLineChart(canvas, series, opts) {
   opts = opts || {};
+  canvas.chartExport = { series, opts };
   const dpr = window.devicePixelRatio || 1;
   const cssW = canvas.clientWidth || canvas.getAttribute('width') || 760;
   const cssH = opts.height || 360;

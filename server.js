@@ -120,6 +120,10 @@ function serveStatic(res, urlPath) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const p = url.pathname;
+  if (req.method === 'GET' && p === '/static/statistics.js') {
+    sendText(res, 200, fs.readFileSync(path.join(projectDir, 'lib', 'stats.js'), 'utf8'), 'application/javascript; charset=utf-8');
+    return;
+  }
   try {
     if (req.method === 'GET' && (p === '/' || p.startsWith('/static/') || /^\/[A-Za-z0-9_.\-]+\.html$/.test(p))) {
       // '/static/x' -> '/x'（serveStatic 再剥掉前导斜杠）；顶层页面（如 /analysis.html）原样传递
