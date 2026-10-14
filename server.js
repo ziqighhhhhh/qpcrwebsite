@@ -21,6 +21,7 @@ const { readZip } = require('./lib/zip.js');
 const sim = require('./lib/simulate.js');
 const syn = require('./lib/synthesize.js');
 const design = require('./lib/design.js');
+const standardcurve = require('./lib/standardcurve.js');
 const { compareGroups } = require('./lib/compare.js');
 const engine = require('./lib/engine.js');
 engine.configure({ binDir: config.binDir, projectDir, adf: config.adf || 'Gen-KA.adf' });
@@ -29,6 +30,24 @@ const experimentsDir = config.experimentsDir || path.join(path.dirname(config.bi
 const controlsDir = path.join(dataDir, 'controls');
 if (!fs.existsSync(controlsDir)) fs.mkdirSync(controlsDir, { recursive: true });
 const layoutFile = path.join(dataDir, 'layout.json');   // 96-well plate naming layout (entry page)
+const standardsFile = path.join(dataDir, 'standards.json'); // manual standard-curve wells (real experiments)
+
+// layout wells ({A1:{target,simple}}) — overlaid onto views/exports
+function readLayoutWells() {
+  try {
+    if (!fs.existsSync(layoutFile)) return {};
+    const lay = JSON.parse(fs.readFileSync(layoutFile, 'utf8'));
+    return (lay && lay.wells && typeof lay.wells === 'object') ? lay.wells : {};
+  } catch (e) { return {}; }
+}
+// manual standard wells ({A1:{quantity,unit}})
+function readStandards() {
+  try {
+    if (!fs.existsSync(standardsFile)) return { wells: {}, updatedAt: null };
+    const s = JSON.parse(fs.readFileSync(standardsFile, 'utf8'));
+    return { wells: (s && s.wells) || {}, updatedAt: s ? s.updatedAt || null : null };
+  } catch (e) { return { wells: {}, updatedAt: null }; }
+}
 
 // ---- single source of truth ----
 let experiment = null;
@@ -204,11 +223,68 @@ const server = http.createServer(async (req, res) => {
           theoreticalExpression: derived.theoreticalExpression,
           templateCopies: derived.templateCopies,
           totalWells: derived.totalWells,
+          standards: derived.standards,
+          standardWells: derived.standardWells,
+          warnings: derived.warnings,
           issues: derived.issues,
           layout: design.buildLayout(opts.design || {}),
         });
       } catch (e) {
         sendJson(res, 400, { error: 'derive failed: ' + e.message });
+      }
+      return;
+    }
+    // ---- 标准曲线：手动标记的标准品孔（真实数据用）----
+    if (req.method === 'GET' && p === '/api/standards') {
+      const s = readStandards();
+      sendJson(res, 200, { ok: true, wells: s.wells, updatedAt: s.updatedAt });
+      return;
+    }
+    if (req.method === 'POST' && p === '/api/standards') {
+      try {
+        const body = await readBody(req, 256 * 1024);
+        const opts = JSON.parse(body.toString('utf8').replace(/^\uFEFF/, ''));
+        const wells = {};
+        if (opts.wells && typeof opts.wells === 'object') {
+          for (const k of Object.keys(opts.wells)) {
+            if (!/^[A-H]([1-9]|1[0-2])$/.test(k)) continue;
+            const v = opts.wells[k] || {};
+            const quantity = parseFloat(v.quantity);
+            // 无效/空浓度 = 清除该孔（保证面板删掉一个孔能真正生效）
+            if (!Number.isFinite(quantity) || quantity <= 0 || quantity > 1e15) continue;
+            wells[k] = { quantity, unit: String(v.unit || 'copies').slice(0, 24) };
+          }
+        }
+        const payload = { wells, updatedAt: new Date().toISOString() };
+        fs.writeFileSync(standardsFile, JSON.stringify(payload, null, 2), 'utf8');
+        sendJson(res, 200, { ok: true, count: Object.keys(wells).length, wells, updatedAt: payload.updatedAt });
+      } catch (e) {
+        sendJson(res, 400, { error: 'standards failed: ' + e.message });
+      }
+      return;
+    }
+    // ---- 标准曲线分析（拟合 + 未知样本定量）----
+    if (req.method === 'GET' && p === '/api/standard-curve') {
+      if (!experiment) { sendJson(res, 404, { error: 'no experiment loaded — upload or synthesize one first' }); return; }
+      try {
+        const dye = url.searchParams.get('dye') || experiment.dyes[0];
+        const result = standardcurve.analyzeStandardCurve(experiment, {
+          dye,
+          manual: readStandards().wells,
+          layoutNames: readLayoutWells(),
+        });
+        if ((url.searchParams.get('format') || 'json') === 'csv') {
+          const csv = standardcurve.toCsv(result);
+          res.writeHead(200, {
+            'Content-Type': 'text/csv; charset=utf-8',
+            'Content-Disposition': 'attachment; filename="' + (result.experimentId || 'standard_curve') + '_standard_curve.csv"',
+          });
+          res.end(csv);
+          return;
+        }
+        sendJson(res, 200, result);
+      } catch (e) {
+        sendJson(res, 500, { error: 'standard curve failed: ' + e.message });
       }
       return;
     }
@@ -222,13 +298,7 @@ const server = http.createServer(async (req, res) => {
       const format = url.searchParams.get('format') || 'csv';
       const base = experiment.id;
       // overlay plate-naming layout (Target/Simple per well) into exports
-      let layoutNames = null;
-      try {
-        if (fs.existsSync(layoutFile)) {
-          const lay = JSON.parse(fs.readFileSync(layoutFile, 'utf8'));
-          if (lay && lay.wells && typeof lay.wells === 'object') layoutNames = lay.wells;
-        }
-      } catch (e) { /* ignore layout errors in export */ }
+      const layoutNames = readLayoutWells();
       if (format === 'json') {
         const out = Object.assign({}, experiment, { layoutNames: layoutNames || {} });
         const buf = toJSON(out);
@@ -390,6 +460,11 @@ const server = http.createServer(async (req, res) => {
               fs.writeFileSync(layoutFile, JSON.stringify(Object.assign({}, cur, { wells: synthLayout }), null, 2), 'utf8');
             } catch (e) { /* ignore layout write errors */ }
           }
+          // 设计自带标准品时清空手动标记：否则上一块板的手动孔会覆盖新设计的标准品
+          if (synthDerived.standards) {
+            try { fs.writeFileSync(standardsFile, JSON.stringify({ wells: {}, updatedAt: new Date().toISOString() }, null, 2), 'utf8'); }
+            catch (e) { /* ignore standards write errors */ }
+          }
         }
         saveExperiment();
         controlExperiment = null; controlFile = null; // stale simulated control no longer applies
@@ -413,6 +488,9 @@ const server = http.createServer(async (req, res) => {
             bioReps: synthDerived.design.bioReps,
             techReps: synthDerived.design.techReps,
             techSd: synthDerived.quality.pipSd,   // QC 报告显示"设定 SD"（复孔移液误差）
+            standards: synthDerived.standards,
+            standardWells: synthDerived.standardWells,
+            warnings: synthDerived.warnings,
           } : null,
           designAnalysis,
           layout: synthLayout,

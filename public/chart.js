@@ -64,7 +64,16 @@ function drawLineChart(canvas, series, opts) {
   series.forEach((s, si) => {
     if (!s.points || !s.points.length) return;
     ctx.strokeStyle = s.color || palette(si);
+    ctx.fillStyle = s.color || palette(si);
     ctx.lineWidth = s.width || 2;
+    // scatter series (e.g. standard-curve points): draw markers without a connecting line
+    if (s.pointsOnly) {
+      s.points.forEach(p => {
+        if (!isFinite(p.x) || !isFinite(p.y)) return;
+        ctx.beginPath(); ctx.arc(sx(p.x), sy(p.y), s.pointRadius || 3.5, 0, Math.PI * 2); ctx.fill();
+      });
+      return;
+    }
     if (s.dash) ctx.setLineDash(s.dash);
     ctx.beginPath();
     let started = false;

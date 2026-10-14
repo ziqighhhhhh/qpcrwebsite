@@ -233,6 +233,37 @@ input::placeholder{color:#a9b2c4}
           <input type="number" id="dsSeed" step="1" placeholder="留空 = 随机">
         </div>
 
+        <div class="field" style="border-top:1px dashed var(--line);padding-top:12px">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" id="dsStdOn" style="width:auto"> 含标准曲线（系列稀释标准品，用于绝对定量）
+          </label>
+          <div class="row" style="margin-top:8px">
+            <div class="field">
+              <label>标准品点数</label>
+              <input type="number" id="dsStdPoints" min="3" max="6" step="1" value="5">
+              <div class="tiny">3–6 个浓度点</div>
+            </div>
+            <div class="field">
+              <label>每点复孔数</label>
+              <input type="number" id="dsStdReps" min="1" max="3" step="1" value="3">
+              <div class="tiny">1–3 孔</div>
+            </div>
+          </div>
+          <div class="row" style="margin-top:8px">
+            <div class="field">
+              <label>起始浓度</label>
+              <input type="number" id="dsStdStart" min="100" max="1000000000" step="any" value="10000000">
+              <div class="tiny">最高浓度点（任意单位）</div>
+            </div>
+            <div class="field">
+              <label>稀释倍数</label>
+              <input type="number" id="dsStdDil" min="2" max="100" step="any" value="5">
+              <div class="tiny">2–100 倍系列稀释</div>
+            </div>
+          </div>
+          <div class="tiny" id="dvStdHint">标准品不参与 ΔΔCt 分组统计；生成后在「③ 标准曲线」页拟合 Cq ~ log₁₀(浓度) 并反算未知样本。</div>
+        </div>
+
         <div style="background:#f6f8fd;border:1px solid var(--line-2);border-radius:var(--r-md);padding:10px 12px;margin-top:6px">
           <div style="font-size:12px;font-weight:700;color:#2a3852;margin-bottom:6px">系统自动推导 <span id="dsQualityLabel" style="font-weight:400;color:var(--muted)"></span></div>
           <div class="tiny" style="margin:0;line-height:1.9">
@@ -240,6 +271,7 @@ input::placeholder{color:#a9b2c4}
             <div>初始模板量（拷贝/反应）：对照 <b id="dvCtrlCopies">1,000,000</b> ｜ 处理 <b id="dvTreatCopies">—</b> ｜ 内参 <b id="dvRefCopies">—</b></div>
             <div>预期 Cq 差异：ΔCq ≈ <b id="dvDeltaCq">2.02</b>（处理组 Cq ≈ <b id="dvTreatCq">17.98</b>）</div>
             <div>PCR 扩增效率：≈ <b id="dvEff">97</b> %</div>
+            <div>标准曲线：<b id="dvStd">未启用</b></div>
             <div>总孔数：<b id="dvTotal">—</b> <span id="dvTotalWarn" style="color:var(--danger)"></span></div>
           </div>
         </div>
@@ -320,6 +352,14 @@ function dsCollect(){
     direction:$("dsDir").value,
     quality:$("dsQuality").value,
     seed:$("dsSeed").value.trim()===""?null:parseInt($("dsSeed").value,10),
+    standards:{
+      enabled:$("dsStdOn").checked,
+      points:parseInt($("dsStdPoints").value,10)||5,
+      replicates:parseInt($("dsStdReps").value,10)||3,
+      startQuantity:parseFloat($("dsStdStart").value)||1e7,
+      dilution:parseFloat($("dsStdDil").value)||5,
+      unit:"copies",
+    },
   };
 }
 function dsFill(design){
@@ -336,6 +376,14 @@ function dsFill(design){
   if(design.direction)$("dsDir").value=design.direction;
   if(design.quality&&QUALITY_LABELS[design.quality])$("dsQuality").value=design.quality;
   if(design.seed)$("dsSeed").value=design.seed;
+  const s=design.standards;
+  if(s){
+    $("dsStdOn").checked=!!s.enabled;
+    if(s.points)$("dsStdPoints").value=s.points;
+    if(s.replicates)$("dsStdReps").value=s.replicates;
+    if(s.startQuantity)$("dsStdStart").value=s.startQuantity;
+    if(s.dilution)$("dsStdDil").value=s.dilution;
+  }
   dsRenderGroups();
   // 组名回填
   if(design.groups)design.groups.forEach((g,i)=>{
@@ -362,6 +410,16 @@ function dsDerive(){
       $("dvDeltaCq").textContent=Number(j.deltaCq).toFixed(2);
       $("dvTreatCq").textContent=Number(j.treatCq).toFixed(2);
       $("dvEff").textContent=j.efficiencyPct;
+      if(j.standards){
+        const pts=j.standards.points||[];
+        const cqs=pts.map(p=>p.cq);
+        $("dvStd").textContent=pts.length+" 点 × "+j.standards.replicates+" 复孔（"+
+          fmtQtyShort(j.standards.startQuantity)+" → "+fmtQtyShort(pts[pts.length-1].quantity)+
+          "，Cq "+Math.min(...cqs).toFixed(2)+"–"+Math.max(...cqs).toFixed(2)+"）";
+      } else {
+        $("dvStd").textContent="未启用";
+      }
+      $("dvStdHint").textContent=(j.warnings&&j.warnings.length)?("⚠ "+j.warnings.join("；")):"标准品不参与 ΔΔCt 分组统计；生成后在「③ 标准曲线」页拟合 Cq ~ log₁₀(浓度) 并反算未知样本。";
       $("dvTotal").textContent=j.totalWells+" 孔";
       $("dvTotalWarn").textContent=(j.issues&&j.issues.length)?j.issues.join("；"):"";
       $("bioModeHint").textContent=(j.issues&&j.issues.length)?"⚠ "+j.issues.join("；"):"推导完成 — 进入数据分析页后将按此设计合成并经原版引擎分析。";
@@ -369,6 +427,12 @@ function dsDerive(){
   },250);
 }
 function dsPersist(){persist();}
+// 标准品浓度简写：1e7 → 1.0E7
+function fmtQtyShort(q){
+  if(!isFinite(q))return "—";
+  if(q>=1e4)return q.toExponential(1).replace("e+","E");
+  return String(Math.round(q*100)/100);
+}
 
 function collectWells(){
   const out={};
@@ -405,7 +469,8 @@ fetch("/api/layout").then(r=>r.json()).then(j=>{
 }).catch(()=>{ setSaveStatus("后端未连接 — 仅本地使用","err"); dsRenderGroups(); render(); });
 
 // 设计面板事件：任何改动 → 重推推导 + 保存
-["dsGroups","dsBio","dsTech","dsTarget","dsRef","dsFold","dsDir","dsQuality","dsSeed"].forEach(id=>{
+["dsGroups","dsBio","dsTech","dsTarget","dsRef","dsFold","dsDir","dsQuality","dsSeed",
+ "dsStdOn","dsStdPoints","dsStdReps","dsStdStart","dsStdDil"].forEach(id=>{
   const el=$(id); if(!el) return;
   el.addEventListener("input",()=>{
     if(id==="dsGroups"){ dsGroupCount=parseInt(el.value,10)||2; dsRenderGroups(); }

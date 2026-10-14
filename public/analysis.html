@@ -10,8 +10,9 @@
 <header>
   <div class="brand">qPCR <span>Web</span></div>
   <div class="controls">
-    <a class="btn" href="/standard-curve.html">标准曲线</a>
     <a class="btn" href="/" title="返回 96 孔板命名页（实验设计入口）">① 孔板命名</a>
+    <a class="btn primary" href="/analysis.html">② 数据分析</a>
+    <a class="btn" href="/standard-curve.html" title="标准曲线拟合与未知样本绝对定量">③ 标准曲线</a>
     <label class="btn upload"><input type="file" id="fileInput" accept=".lc96p,.zip" hidden>上传 .lc96p</label>
     <button id="btnAnalyze" class="btn primary" disabled>Analyze</button>
     <button id="btnIcGene" class="btn" title="分析前先标记哪些孔是内参基因（如 GAPDH），画图将用 ΔΔCt 内参归一化" disabled>设置内参基因</button>

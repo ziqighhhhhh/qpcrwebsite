@@ -575,6 +575,13 @@ function renderDesignReport(report) {
       'U = ' + fmt(t.mannWhitney.u) + ' · p = ' + pText(t.mannWhitney.p) +
       ' · ' + (t.mannWhitney.method === 'exact' ? '精确置换' : '近似检验')]);
   }
+  if (der.standards) {
+    const pts = der.standards.points || [];
+    const cqs = pts.map(p => p.cq);
+    cards.push(['标准曲线（设计）', pts.length + ' 点 × ' + der.standards.replicates + ' 复孔 · 设计效率 ' + der.standards.designedEfficiencyPct + '%'],
+      ['标准品 Cq 区间', (cqs.length ? Math.min(...cqs).toFixed(2) + ' – ' + Math.max(...cqs).toFixed(2) : '—') + '（A 行起）'],
+      ['标准曲线检验', '在「③ 标准曲线」页拟合：实测效率应接近设计效率']);
+  }
   const qc = an.qc || { abnormal: 0, ntcBad: 0 };
   cards.push(['异常孔 / QC', '异常孔 ' + qc.abnormal + ' 孔 · NTC ' + (qc.ntcBad ? qc.ntcBad + ' 孔异常 ⚠' : '全部阴性 ✓')]);
   E.designCards.innerHTML = cards.map(c =>

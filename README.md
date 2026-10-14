@@ -8,6 +8,7 @@
 ## 功能
 
 - **96 孔板命名（入口页）**：打开网站第一步设计板面 —— 多选孔位填写 Target Name / Simple Name，输入即时保存到服务器 `data/layout.json`（与实验数据解耦，可先设计后上传）；数据分析页按孔位叠加显示命名，导出 CSV/JSON/XLSX 自动带 Target/Simple 列
+- **标准曲线（③ 页）**：系列稀释标准品 → 最小二乘拟合 `Cq = intercept + slope·log₁₀(浓度)` → 扩增效率 `E = 10^(−1/slope) − 1`（含 95% CI）、R²、残差图、动态范围，并反算未知样本浓度；标准品可来自「模拟实验设计」（带设计真值，可检验实测效率 vs 设计效率）或手动标记（真实 `.lc96p` 用）
 - 上传 `.lc96p`（LightCycler 96 实验文件，ZIP 内包含 RDML 荧光数据）
 - 一键 **Analyze**：调用原版 Kinetic 引擎计算每孔×通道的 Cq / Slope / EPF / 判定等 40+ 参数
 - **左右对称双视图**（原始数据 vs 对照组），每侧 4 区与原软件 QualDetection 布局一致：
@@ -19,7 +20,7 @@
 - **扩增曲线**：选中孔 + 多孔对比叠加，曲线与 Cq 标记
 - **通道切换**：FAM / Yellow555 等（由文件自动识别）
 - **结果表**：排序、勾选对比、孔详情
-- **导出**：CSV / JSON / Excel (XLSX)
+- **导出**：CSV / JSON / Excel (XLSX)（服务端，来自单一事实来源）；图表可**导出 PNG / SVG**（浏览器端，覆盖全部画布：曲线/柱状/箱线/散点。SVG 由**录制到的 2D 绘图指令重绘为矢量**（`chart-export.js` 包装 `getContext`），不是把位图塞进 SVG；devicePixelRatio 缩放会被归一化回 CSS 像素）
 - 数据单一事实来源：整个系统围绕一个 Experiment JSON 模型工作，所有视图与导出都从它派生
 
 ## 快速开始
@@ -209,6 +210,36 @@ PCR 扩增效率（按质量等级：优 100% / 良 98% / 中 96% / 差 94%）�
 变异大、异常孔多、可能不显著——学生可直观看到样本量/变异/质量对统计功效
 的影响（对应 `docs/模拟场景设定.md` 的 P0/P1 修复建议）。
 
+## 标准曲线（绝对定量）
+
+**入口**：顶部「③ 标准曲线」（`public/standard-curve.html`）。读当前实验（真实 `.lc96p` 或模拟实验）的引擎 Cq，拟合标准曲线并反算未知样本。设计面板勾选「含标准曲线」即自动布板。
+
+两条标准品来源，可叠加（手动标记覆盖同名孔）：
+
+| 来源 | 适用 | 说明 |
+|---|---|---|
+| **设计自带**（`standards.enabled`） | 模拟实验 | 按「点数 × 复孔 × 起始浓度 × 稀释倍数」自动占用板面前几行（A 行起），每孔记录设计真值 `quantity / unit / log10`，RDML 样本类型标为 `std` |
+| **手动标记** | 真实 `.lc96p` | 孔板上按稀释顺序点选孔位 → 填系列浓度（起始浓度 + 稀释倍数）→ 存 `data/standards.json`；真实仪器数据不含浓度，只能人工指定 |
+
+**拟合与判定**（`lib/standardcurve.js`，纯函数、可单测）：
+
+- 最小二乘 `Cq = intercept + slope·log₁₀(数量)`；只取引擎判 Positive 的孔，Negative/Invalid 排除并提示
+- 效率 `E = 10^(−1/slope) − 1`（slope −3.3219 → 100%），并用斜率 ± t₀.₉₅,ₙ₋₂·SE 给出**效率 95% CI**（`stats.tQuantile` 二分求临界值）
+- R²、残差 SD、逐孔残差图（看有无系统性弯曲）、动态范围
+- 自动警告：效率超出 90–110%、R² < 0.98、残差 SD > 0.5 循环、部分标准品未判 Positive
+- **未知样本定量**：`数量 = 10^((Cq − intercept)/slope)`，逐孔 + 按样本汇总（平均 Cq ± SD → 平均数量）
+
+**可检验性**（设计驱动的标准品带真值，所以能对照）：
+
+1. `analyzeDesign()` 用**设计真值 Cq**（不含引擎偏差）拟合，验证设计链路自洽（`standardCurve.truthFit`）；
+2. 页面把**引擎实测**效率与设计效率并列，偏差 > 5 个百分点即警告。
+
+实测（`test/standardcurve.test.js`，seed 42，设计效率 98%）：真值拟合 R² > 0.99、效率偏差 < 5 个百分点；跨 13 个种子的标准化斜率偏差（观测/标准误）均值 0.17、SD 1.09，符合统计预期。
+
+标准品孔**不进入** ΔΔCt 分组与 t 检验/Mann–Whitney（`analyzeDesign` 与 QC 计数按 `sampleType === 'std'` 排除），绝对定量与相对定量互不干扰。
+
+**导出**：标准品明细 + 未知样本定量 + 样本汇总的 CSV（`/api/standard-curve?format=csv`，带 BOM 便于 Excel），以及标准曲线图/残差图的 PNG 与 SVG。
+
 ## 验证
 
 对 `DemoData\Demo_Qual Detect Dual Color.lc96p` 全量验证：
@@ -216,6 +247,18 @@ PCR 扩增效率（按质量等级：优 100% / 良 98% / 中 96% / 差 94%）�
 - 192 条曲线 × (Cq/Slope/EPF/Call) 与 `.lc96p` 内存储结果**全部一致**（EPF 精确到 14 位小数）
 - 引擎独立运行耗时约 1–2 秒/板
 - 与 LC96 软件的一致性由 `calculated_data.xml` 中的历史结果交叉验证
+
+回归测试（`node test/<name>.test.js`，共 49 项，本仓库 `test/` 仅跟踪 `*.test.js`）：
+
+| 套件 | 覆盖 |
+|---|---|
+| `stats-regression.test.js`（8） | t 检验临界值、Yates 卡方、Mann–Whitney 精确/近似、Node 与浏览器同公式 |
+| `random.test.js`（23） | 12 种合成配置 × 种子 0/7 可复现、不篡改 `Math.random`、未设种子不串流 |
+| `standardcurve.test.js`（13） | 最小二乘/效率/CI/t 临界值、设计带标准品的布板与真值、标准品不进 ΔΔCt、手动覆盖、CSV 导出 |
+| `standard-curve-page.test.js`（5） | 页面 id 契约、96 孔板与三张表渲染、图表 series 形状、点选顺序填充系列、无实验时不崩 |
+| `chart-export.test.js` | SVG 转义/无 NaN、散点只出圆点、拟合虚线；绘图指令录制 → 矢量重绘（dpr 归一化、柱/圆/路径/文字/旋转/虚线、重绘重置指令） |
+
+其中统计与拟合两条链路都另做过**独立交叉验证**：`lib/stats.js` 的 t 尾概率/卡方/Mann–Whitney 对照 Python 数值积分与暴力枚举（最大相对误差 1.1e-11）；`lib/standardcurve.js` 的斜率/截距/R²/残差 SD/斜率 SE 对照 `numpy.polyfit`（最大绝对差 4.8e-13），并用真实引擎 Cq 跑通 `/api/standard-curve`（斜率恢复误差 4.4e-16）。
 
 ## 设计取舍（第一性原理）
 
@@ -247,11 +290,17 @@ qpcrwebsite/
 │   ├── engine.js      # Bridge 客户端（按染料分组选择 ADF）
 │   ├── export.js      # CSV / JSON / XLSX 导出
 │   ├── synthesize.js  # 学生模拟实验：4PL 从零合成 + 引擎校准 + QC 参数
+│   ├── design.js      # 设计驱动合成（生物学真值 → 技术误差 → 原始数据）+ ΔΔCt/统计
 │   ├── simulate.js    # 对照组生成（曲线右移 + 幅度缩放，IC 通道保持稳定）
 │   ├── compare.js     # 两组统计对比（t 检验 / Cohen's d / 卡方）
+│   ├── standardcurve.js # 标准曲线拟合 + 未知样本定量 + CSV 导出
 │   └── stats.js       # 零依赖统计（Numerical Recipes）
 ├── public/            # 前端（原生 JS + canvas 图表）
 │   ├── index.html     # 96 孔板命名页（入口，经 /api/layout 持久化到 data/layout.json）
+│   ├── standard-curve.html # 标准曲线页（标准品标记 / 拟合 / 定量 / 导出）
+│   ├── standard-curve.js   # 标准曲线页逻辑（孔板、图表、系列稀释填充）
+│   ├── chart-export.js     # 图表 PNG / SVG 导出（所有 canvas）
 │   └── analysis.html  # 数据分析页（上传/分析/对照组/学生模拟/统计/导出）
-└── data/              # 实验与命名布局持久化（gitignored）
+├── test/              # 回归测试（仅 *.test.js 入库）
+└── data/              # 实验、命名布局与手动标准品持久化（gitignored）
 ```

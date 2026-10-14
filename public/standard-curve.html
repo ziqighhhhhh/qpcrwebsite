@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>qPCR Web — 标准曲线（绝对定量）</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="brand">qPCR <span>Web</span></div>
+  <div class="controls">
+    <a class="btn" href="/" title="返回 96 孔板命名页（实验设计入口）">① 孔板命名</a>
+    <a class="btn" href="/analysis.html" title="上传/分析 .lc96p，ΔΔCt 与统计检验">② 数据分析</a>
+    <a class="btn primary" href="/standard-curve.html">③ 标准曲线</a>
+    <button id="btnReload" class="btn">刷新数据</button>
+    <span class="spacer"></span>
+    <a id="btnCsv" class="btn" href="/api/standard-curve?format=csv" download>导出 CSV</a>
+  </div>
+  <div id="status" class="status">正在加载实验…</div>
+</header>
+
+<main class="duo">
+  <div class="col">
+    <div class="col-head">标准品设置<span id="stdSource" class="col-sub"></span></div>
+    <section class="panel">
+      <h2>孔板（按稀释顺序点选标准品孔）</h2>
+      <div class="ic-tools">
+        <label>起始浓度 <input type="number" id="startQty" value="10000000" min="100" max="1e9" step="any" style="width:110px"></label>
+        <label>稀释倍数 <input type="number" id="dilution" value="5" min="2" max="100" step="any" style="width:70px"></label>
+        <label>单位 <input type="text" id="unit" value="copies" maxlength="24" style="width:80px"></label>
+        <button id="btnFillSeries" class="btn accent">按顺序填充系列</button>
+        <button id="btnClearWells" class="btn">清空标准品</button>
+        <span class="ic-count" id="selCount">已选 0 孔</span>
+      </div>
+      <div class="plate-wrap" style="max-width:520px"><div id="scPlate" class="plate plate-sm"></div></div>
+      <div class="legend">
+        <span><i class="sw" style="background:#ffd166"></i>标准品</span>
+        <span><i class="sw" style="background:#8a5cf6"></i>当前选中</span>
+        <span><i class="sw" style="background:#1d2537;border:1px solid #26394a"></i>空孔</span>
+      </div>
+      <div class="hint">真实 .lc96p 不含浓度信息，需在此手动标记；由「模拟实验设计」生成的实验会带设计浓度（显示为 design 来源），可直接沿用或覆盖。</div>
+    </section>
+
+    <section class="panel">
+      <h2>标准品明细 <span id="stdCount" class="col-sub"></span></h2>
+      <div class="table-wrap"><table class="table" id="stdTable"><thead></thead><tbody></tbody></table></div>
+      <div class="hint">Cq 取原版引擎结果（仅 Positive 显示 Cq）；fittedCq / 残差由当前拟合给出。</div>
+    </section>
+  </div>
+
+  <div class="col">
+    <div class="col-head">拟合结果<span id="fitSub" class="col-sub"></span></div>
+    <section class="panel">
+      <div class="compare-cards" id="fitCards"></div>
+      <div id="fitVerdict" class="verdict" style="margin-top:10px"></div>
+      <div class="stats-charts" style="grid-template-columns:1fr">
+        <div class="chart-box">
+          <h3 id="curveTitle">标准曲线 Cq ~ log₁₀(浓度)</h3>
+          <canvas id="stdCurveChart" width="720" height="360" data-line-chart></canvas>
+          <div class="hint">实心点 = 各标准品孔实测 Cq；虚线 = 最小二乘拟合；效率 = 10<sup>−1/slope</sup> − 1</div>
+        </div>
+        <div class="chart-box">
+          <h3>残差图</h3>
+          <canvas id="stdResidualChart" width="720" height="200" data-line-chart></canvas>
+          <div class="hint">残差 = 实测 Cq − 拟合 Cq；理想情况下应围绕 0 随机分布（无系统性弯曲）</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>未知样本定量 <span id="unkCount" class="col-sub"></span></h2>
+      <div class="table-wrap"><table class="table" id="unkTable"><thead></thead><tbody></tbody></table></div>
+      <h2 style="margin-top:12px">按样本汇总（重复孔平均）</h2>
+      <div class="table-wrap short" style="max-height:180px"><table class="table" id="sumTable"><thead></thead><tbody></tbody></table></div>
+      <div class="hint">未知样本浓度 = 10<sup>(Cq − intercept)/slope</sup>；仅对落在标准曲线动态范围内的结果可信（超出范围会外推）。</div>
+    </section>
+  </div>
+</main>
+
+<script src="/static/chart.js"></script>
+<script src="/static/standard-curve.js"></script>
+<script src="/static/chart-export.js"></script>
+</body>
+</html>
