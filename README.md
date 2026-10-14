@@ -248,7 +248,7 @@ PCR 扩增效率（按质量等级：优 100% / 良 98% / 中 96% / 差 94%）�
 - 引擎独立运行耗时约 1–2 秒/板
 - 与 LC96 软件的一致性由 `calculated_data.xml` 中的历史结果交叉验证
 
-回归测试（`node test/<name>.test.js`，共 49 项，本仓库 `test/` 仅跟踪 `*.test.js`）：
+回归测试（`node test/<name>.test.js`，共 56 项，本仓库 `test/` 仅跟踪 `*.test.js`）：
 
 | 套件 | 覆盖 |
 |---|---|
@@ -256,7 +256,9 @@ PCR 扩增效率（按质量等级：优 100% / 良 98% / 中 96% / 差 94%）�
 | `random.test.js`（23） | 12 种合成配置 × 种子 0/7 可复现、不篡改 `Math.random`、未设种子不串流 |
 | `standardcurve.test.js`（13） | 最小二乘/效率/CI/t 临界值、设计带标准品的布板与真值、标准品不进 ΔΔCt、手动覆盖、CSV 导出 |
 | `standard-curve-page.test.js`（5） | 页面 id 契约、96 孔板与三张表渲染、图表 series 形状、点选顺序填充系列、无实验时不崩 |
+| `page-contract.test.js`（4） | 三个页面的元素 id 契约与导航链接全部可达（曾据此发现 `dvStdHint` 拼写错误） |
 | `chart-export.test.js` | SVG 转义/无 NaN、散点只出圆点、拟合虚线；绘图指令录制 → 矢量重绘（dpr 归一化、柱/圆/路径/文字/旋转/虚线、重绘重置指令） |
+| `chart-export-page.test.js`（3） | `getContext` 包装生效、每个画布一个 PNG+SVG 按钮、点 SVG 真产出矢量文件、未绘制时给出友好报错 |
 
 其中统计与拟合两条链路都另做过**独立交叉验证**：`lib/stats.js` 的 t 尾概率/卡方/Mann–Whitney 对照 Python 数值积分与暴力枚举（最大相对误差 1.1e-11）；`lib/standardcurve.js` 的斜率/截距/R²/残差 SD/斜率 SE 对照 `numpy.polyfit`（最大绝对差 4.8e-13），并用真实引擎 Cq 跑通 `/api/standard-curve`（斜率恢复误差 4.4e-16）。
 

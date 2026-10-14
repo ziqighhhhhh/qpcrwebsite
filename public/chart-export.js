@@ -259,7 +259,7 @@ function canvasSvg(canvas) {
 // browser wiring: recorder install + per-canvas download buttons
 // ---------------------------------------------------------------------------
 function installCanvasRecorder(win) {
-  const scope = win || (typeof window !== 'undefined' ? window : null);
+  const scope = win || (typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : null));
   if (!scope || !scope.HTMLCanvasElement) return false;
   const proto = scope.HTMLCanvasElement.prototype;
   if (proto.__qpcRecorderInstalled) return true;
