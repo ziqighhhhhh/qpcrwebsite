@@ -220,6 +220,7 @@ const server = http.createServer(async (req, res) => {
           deltaCq: derived.deltaCq,
           treatCq: derived.treatCq,
           theoryDct: derived.theoryDct,
+          genes: derived.genes,
           theoreticalExpression: derived.theoreticalExpression,
           templateCopies: derived.templateCopies,
           totalWells: derived.totalWells,
@@ -453,19 +454,21 @@ const server = http.createServer(async (req, res) => {
           };
           designAnalysis = design.analyzeDesign(experiment, synthDerived.design);
           // auto-generated plate naming overlays exports / views (layout.json is the
-          // single source for Target/Simple per well)
+          // single source for Target/Simple per well)。
+          // 合并而非覆盖：用户在命名页手动命名的孔优先保留，自动布板只补齐未命名孔，
+          // 否则点一次「分析」就会把用户辛苦填的自定义名称全部冲掉。
           if (synthLayout) {
             try {
               const cur = fs.existsSync(layoutFile) ? JSON.parse(fs.readFileSync(layoutFile, 'utf8')) : {};
-              fs.writeFileSync(layoutFile, JSON.stringify(Object.assign({}, cur, { wells: synthLayout }), null, 2), 'utf8');
+              const mergedWells = Object.assign({}, synthLayout, (cur && cur.wells) || {});
+              fs.writeFileSync(layoutFile, JSON.stringify(Object.assign({}, cur, { wells: mergedWells }), null, 2), 'utf8');
             } catch (e) { /* ignore layout write errors */ }
           }
-          // 设计自带标准品时清空手动标记：否则上一块板的手动孔会覆盖新设计的标准品
-          if (synthDerived.standards) {
-            try { fs.writeFileSync(standardsFile, JSON.stringify({ wells: {}, updatedAt: new Date().toISOString() }, null, 2), 'utf8'); }
-            catch (e) { /* ignore standards write errors */ }
-          }
         }
+        // 换新板面（合成或设计驱动）后清空手动标准品标记：标准品属于特定板面，
+        // 残留标记会在新板上产生"幽灵定量"（未设标准品的实验也显示标准曲线定量）。
+        try { fs.writeFileSync(standardsFile, JSON.stringify({ wells: {}, updatedAt: new Date().toISOString() }, null, 2), 'utf8'); }
+        catch (e) { /* ignore standards write errors */ }
         saveExperiment();
         controlExperiment = null; controlFile = null; // stale simulated control no longer applies
         sendJson(res, 200, {
@@ -480,6 +483,7 @@ const server = http.createServer(async (req, res) => {
             deltaCq: synthDerived.deltaCq,
             treatCq: synthDerived.treatCq,
             theoryDct: synthDerived.theoryDct,
+            genes: synthDerived.genes,
             theoreticalExpression: synthDerived.theoreticalExpression,
             templateCopies: synthDerived.templateCopies,
             totalWells: synthDerived.totalWells,
@@ -526,6 +530,9 @@ const server = http.createServer(async (req, res) => {
         if (!fs.existsSync(rawDir)) fs.mkdirSync(rawDir, { recursive: true });
         fs.writeFileSync(path.join(rawDir, experiment.id + '.lc96p'), body);
         saveExperiment();
+        // 新上传的板面与旧板无关：清空手动标准品标记，避免上一块板的标准品套到新板上
+        try { fs.writeFileSync(standardsFile, JSON.stringify({ wells: {}, updatedAt: new Date().toISOString() }, null, 2), 'utf8'); }
+        catch (e) { /* ignore */ }
         sendJson(res, 200, { ok: true, experiment: summary() });
       } catch (e) {
         sendJson(res, 400, { error: 'parse failed: ' + e.message });
@@ -553,12 +560,16 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-// ensure bridge exe exists (build if missing)
+// ensure bridge exe (+ its runtime config) exists in binDir
 function ensureBridgeBinary() {
   const dest = path.join(config.binDir, 'engine-bridge.exe');
   const src = path.join(projectDir, 'bridge', 'engine-bridge.exe');
   if (fs.existsSync(src)) {
-    if (!fs.existsSync(dest)) fs.copyFileSync(src, dest);
+    for (const name of ['engine-bridge.exe', 'engine-bridge.exe.config']) {
+      const s = path.join(projectDir, 'bridge', name);
+      const d = path.join(config.binDir, name);
+      if (fs.existsSync(s) && (!fs.existsSync(d) || fs.statSync(s).mtimeMs > fs.statSync(d).mtimeMs)) fs.copyFileSync(s, d);
+    }
     return;
   }
   const bat = path.join(projectDir, 'bridge', 'build.bat');
@@ -572,7 +583,7 @@ function ensureBridgeBinary() {
 // restore last persisted experiment (best effort)
 function restoreLast() {
   try {
-    const files = fs.readdirSync(dataDir).filter(f => f.endsWith('.json') && f !== 'layout.json');
+    const files = fs.readdirSync(dataDir).filter(f => f.endsWith('.json') && f !== 'layout.json' && f !== 'standards.json');
     if (files.length) loadExperiment(path.basename(files[files.length - 1], '.json'));
   } catch (e) { /* noop */ }
 }

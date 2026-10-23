@@ -2,7 +2,42 @@
 // ---------------------------------------------------------------------------
 // Zero-dependency canvas line chart.
 // series: [{ name, color, points: [{x, y}], width, dash }]
+//
+// THEME reads the CSS custom properties once (style.css is the single source
+// of truth), so canvas chrome (gridlines, ticks, labels) follows the DOM
+// theme instead of duplicating hex values.
 // ---------------------------------------------------------------------------
+const THEME = (() => {
+  // Node-side unit tests evaluate this file without a DOM: fall back to the
+  // same defaults the CSS tokens carry.
+  const fallback = {
+    surface: '#ffffff', grid: '#eef0f3', tick: '#5f6368', label: '#5f6368', text: '#0f1216',
+    ink: '#141414', grey: '#8a8a8a', accent: '#1d5fbf',
+    positive: '#247b50', negative: '#c4242a', warning: '#92400e',
+  };
+  if (typeof getComputedStyle !== 'function' || typeof document === 'undefined') return fallback;
+  const cs = getComputedStyle(document.documentElement);
+  const v = (n, f) => { const x = (cs.getPropertyValue(n) || '').trim(); return x || f; };
+  return {
+    surface: v('--surface', fallback.surface),
+    grid: v('--rule', fallback.grid),
+    tick: v('--muted', fallback.tick),
+    label: v('--muted', fallback.label),
+    text: v('--text', fallback.text),
+    ink: v('--chart-1', fallback.ink),
+    grey: v('--chart-2', fallback.grey),
+    accent: v('--chart-3', fallback.accent),
+    positive: v('--positive', fallback.positive),
+    negative: v('--negative', fallback.negative),
+    warning: v('--warning', fallback.warning),
+  };
+})();
+
+// Multi-curve overlay palette: the first (selected) series takes the one hue;
+// the rest are muted comparisons. No violet/indigo, no status green/red, so
+// curves never read as Call states.
+const CURVE_PALETTE = ['#1d5fbf', '#141414', '#8a8a8a', '#c2410c', '#0e7490', '#be3455'];
+
 function drawLineChart(canvas, series, opts) {
   opts = opts || {};
   canvas.chartExport = { series, opts };
@@ -25,7 +60,7 @@ function drawLineChart(canvas, series, opts) {
   const all = [];
   series.forEach(s => (s.points || []).forEach(p => { if (isFinite(p.x) && isFinite(p.y)) all.push(p); }));
   if (!all.length) {
-    ctx.fillStyle = '#5c7399'; ctx.font = '13px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillStyle = THEME.tick; ctx.font = '13px sans-serif'; ctx.textAlign = 'center';
     ctx.fillText(opts.emptyText || '无数据 — 请选择孔位', cssW / 2, cssH / 2);
     return;
   }
@@ -41,7 +76,7 @@ function drawLineChart(canvas, series, opts) {
   const sy = v => pad.t + ih - ((v - yMin) / (yMax - yMin)) * ih;
 
   // grid + axes
-  ctx.strokeStyle = '#26304a'; ctx.fillStyle = '#6c82a6'; ctx.font = '11px sans-serif'; ctx.lineWidth = 1;
+  ctx.strokeStyle = THEME.grid; ctx.fillStyle = THEME.tick; ctx.font = '11px sans-serif'; ctx.lineWidth = 1;
   const xTicks = 8, yTicks = 6;
   for (let i = 0; i <= xTicks; i++) {
     const v = xMin + (xMax - xMin) * i / xTicks;
@@ -55,7 +90,7 @@ function drawLineChart(canvas, series, opts) {
     ctx.beginPath(); ctx.moveTo(pad.l, Y); ctx.lineTo(pad.l + iw, Y); ctx.stroke();
     ctx.textAlign = 'right'; ctx.fillText(fmtExp(v), pad.l - 6, Y + 4);
   }
-  ctx.fillStyle = '#9db4d8'; ctx.font = '11px sans-serif';
+  ctx.fillStyle = THEME.label; ctx.font = '11px sans-serif';
   ctx.textAlign = 'center'; ctx.fillText(opts.xLabel || 'Cycle', pad.l + iw / 2, cssH - 1);
   ctx.save(); ctx.translate(14, pad.t + ih / 2); ctx.rotate(-Math.PI / 2);
   ctx.fillText(opts.yLabel || 'Fluorescence', 0, 0); ctx.restore();
@@ -96,8 +131,7 @@ function drawLineChart(canvas, series, opts) {
   });
 }
 function palette(i) {
-  const c = ['#4da3ff', '#ff8d6b', '#7fe3a0', '#ffd166', '#c17bff', '#5ad0d0', '#ff7aa2', '#9aa7ff'];
-  return c[i % c.length];
+  return CURVE_PALETTE[i % CURVE_PALETTE.length];
 }
 function round(v, d) { const m = Math.pow(10, d || 0); return Math.round(v * m) / m; }
 function fmtExp(v) {

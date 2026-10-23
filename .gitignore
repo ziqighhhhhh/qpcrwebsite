@@ -3,4 +3,7 @@ node_modules/
 bridge/engine-bridge.exe
 test/*
 !test/*.test.js
+!test/*.check.js
 *.log
+
+.taste-skill/

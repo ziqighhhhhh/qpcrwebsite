@@ -7,12 +7,14 @@
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header>
-  <div class="brand">qPCR <span>Web</span></div>
+<header class="topbar">
+  <div class="brand"><svg class="mark" width="22" height="16" viewBox="0 0 22 16" aria-hidden="true"><g fill="#0f1216"><circle cx="3" cy="3" r="1.7"/><circle cx="8" cy="3" r="1.7"/><circle cx="13" cy="3" r="1.7"/><circle cx="18" cy="3" r="1.7"/><circle cx="3" cy="8" r="1.7"/><circle cx="8" cy="8" r="1.7"/><circle cx="13" cy="8" r="1.7"/><circle cx="18" cy="8" r="1.7"/><circle cx="3" cy="13" r="1.7"/><circle cx="8" cy="13" r="1.7"/><circle cx="18" cy="13" r="1.7"/></g><circle cx="13" cy="13" r="1.7" fill="#1d5fbf"/></svg>qPCR Web</div>
+  <nav class="nav">
+    <a href="/" title="返回 96 孔板命名页（实验设计入口）">孔板命名</a>
+    <a href="/analysis.html" class="active">数据分析</a>
+    <a href="/standard-curve.html" title="标准曲线拟合与未知样本绝对定量">标准曲线</a>
+  </nav>
   <div class="controls">
-    <a class="btn" href="/" title="返回 96 孔板命名页（实验设计入口）">① 孔板命名</a>
-    <a class="btn primary" href="/analysis.html">② 数据分析</a>
-    <a class="btn" href="/standard-curve.html" title="标准曲线拟合与未知样本绝对定量">③ 标准曲线</a>
     <label class="btn upload"><input type="file" id="fileInput" accept=".lc96p,.zip" hidden>上传 .lc96p</label>
     <button id="btnAnalyze" class="btn primary" disabled>Analyze</button>
     <button id="btnIcGene" class="btn" title="分析前先标记哪些孔是内参基因（如 GAPDH），画图将用 ΔΔCt 内参归一化" disabled>设置内参基因</button>
@@ -23,11 +25,10 @@
       <option value="EPF">指标: EPF</option>
     </select>
     <select id="channelSelect" class="select" title="通道"></select>
-    <span class="spacer"></span>
     <label class="sim-inline">对照组 ΔCt <input type="range" id="simDelta" min="3" max="12" step="1" value="8" title="对照组扩增滞后循环数"><span id="simDeltaLabel">8</span></label>
-    <button id="btnSimulate" class="btn primary" disabled>生成对照组</button>
+    <button id="btnSimulate" class="btn" disabled>生成对照组</button>
     <a id="btnDownloadControl" class="btn" href="#" download disabled>下载对照组 .lc96p</a>
-    <button id="btnSynth" class="btn accent" title="从零合成一套模拟实验数据（学生练习用），参数带合理范围校验">学生模拟实验</button>
+    <button id="btnSynth" class="btn" title="从零合成一套模拟实验数据（学生练习用），参数带合理范围校验">学生模拟实验</button>
     <div class="dropdown">
       <button class="btn" id="btnExport" disabled>导出 ▾</button>
       <div class="dropdown-menu" id="exportMenu">
@@ -37,8 +38,11 @@
       </div>
     </div>
   </div>
-  <div id="status" class="status">未加载实验 — 请上传 .lc96p 文件</div>
 </header>
+<div class="pagehead">
+  <h1>数据分析</h1>
+  <div id="status" class="status">未加载实验 — 请上传 .lc96p 文件</div>
+</div>
 
 <section class="sim-summary" id="simResult" hidden>
   <div class="compare-cards" id="compareCards"></div>
@@ -55,66 +59,72 @@
       <div class="hint">每个点 = 一个配对阳性孔；箱线 = Q1/中位/Q3 + min/max</div>
     </div>
     <div class="chart-box wide">
-      <h3>ΔΔCt 计算明细 <button id="btnDdctCsv" class="btn" style="padding:2px 8px;font-size:11px">导出 CSV</button></h3>
+      <h3>ΔΔCt 计算明细 <button id="btnDdctCsv" class="btn" style="min-height:26px;padding:0 8px;font-size:12px">导出 CSV</button></h3>
       <div class="table-wrap short" style="max-height:200px"><table class="table" id="ddctTable"><thead></thead><tbody></tbody></table></div>
     </div>
   </div>
 </section>
 
 <main class="duo">
-  <div class="col">
+  <div class="col" id="leftCol">
     <div class="col-head">原始数据（实验组）<span id="leftTitle" class="col-sub"></span></div>
+    <section class="panel col-empty" id="leftEmpty">
+      <p>未加载实验。点击顶栏「上传 .lc96p」选择实验文件并 Analyze 后，此处显示扩增曲线、判定热图、结果热图与明细表。</p>
+    </section>
     <section class="panel">
-      <h2>1 · Amplification Curves ｜ 扩增曲线 <span id="leftCurveTitle"></span></h2>
+      <h2>扩增曲线 Amplification Curves <span id="leftCurveTitle" class="col-sub"></span></h2>
       <canvas id="leftCurve" width="720" height="300"></canvas>
       <div class="chart-legend" id="leftCurveLegend"></div>
     </section>
     <section class="panel">
-      <h2>2 · Combined Call Heat Map ｜ 综合判定热图 <span class="col-sub"></span></h2>
+      <h2>综合判定热图 Combined Call Heat Map</h2>
       <div id="leftCombined" class="plate plate-sm"></div>
     </section>
     <section class="panel">
-      <h2>1b · Melting Curves ｜ 熔解曲线 <span class="col-sub">SYBR 特异性</span></h2>
+      <h2>熔解曲线 Melting Curves <span class="col-sub">SYBR 特异性</span></h2>
       <canvas id="leftMelt" width="720" height="200"></canvas>
       <div class="chart-legend" id="leftMeltLegend"></div>
     </section>
     <section class="panel">
-      <h2>3 · Heat Map ｜ 孔板结果热图 <span id="leftHeatTitle" class="col-sub"></span></h2>
+      <h2>孔板结果热图 Heat Map <span id="leftHeatTitle" class="col-sub"></span></h2>
       <div id="leftHeat" class="plate plate-sm"></div>
       <div class="legend" id="leftLegend"></div>
     </section>
     <section class="panel">
-      <h2>4 · Result Table ｜ 结果明细表</h2>
+      <h2>结果明细表 Result Table</h2>
       <div class="table-wrap short"><table class="table" id="leftTable"><thead></thead><tbody></tbody></table></div>
-      <div class="hint">点击表头排序；勾选 ☐ 将孔加入曲线对比（左右联动）</div>
+      <div class="hint">点击表头排序；勾选复选框将孔加入曲线对比（左右联动）</div>
     </section>
   </div>
 
-  <div class="col">
+  <div class="col" id="rightCol">
     <div class="col-head">对照组（模拟生成）<span id="rightTitle" class="col-sub"></span></div>
+    <section class="panel col-empty" id="rightEmpty">
+      <p>未生成对照组。点击顶栏「生成对照组」后，此处显示对照组的扩增曲线、判定热图、结果热图与明细表，与左侧实验组同尺度对比。</p>
+    </section>
     <section class="panel">
-      <h2>1 · Amplification Curves ｜ 扩增曲线 <span id="rightCurveTitle"></span></h2>
+      <h2>扩增曲线 Amplification Curves <span id="rightCurveTitle" class="col-sub"></span></h2>
       <canvas id="rightCurve" width="720" height="300"></canvas>
       <div class="chart-legend" id="rightCurveLegend"></div>
     </section>
     <section class="panel">
-      <h2>2 · Combined Call Heat Map ｜ 综合判定热图 <span class="col-sub"></span></h2>
+      <h2>综合判定热图 Combined Call Heat Map</h2>
       <div id="rightCombined" class="plate plate-sm"></div>
     </section>
     <section class="panel">
-      <h2>1b · Melting Curves ｜ 熔解曲线 <span class="col-sub">模拟沿用实验组熔解形态</span></h2>
+      <h2>熔解曲线 Melting Curves <span class="col-sub">模拟沿用实验组熔解形态</span></h2>
       <canvas id="rightMelt" width="720" height="200"></canvas>
       <div class="chart-legend" id="rightMeltLegend"></div>
     </section>
     <section class="panel">
-      <h2>3 · Heat Map ｜ 孔板结果热图 <span id="rightHeatTitle" class="col-sub"></span></h2>
+      <h2>孔板结果热图 Heat Map <span id="rightHeatTitle" class="col-sub"></span></h2>
       <div id="rightHeat" class="plate plate-sm"></div>
       <div class="legend" id="rightLegend"></div>
     </section>
     <section class="panel">
-      <h2>4 · Result Table ｜ 结果明细表</h2>
+      <h2>结果明细表 Result Table</h2>
       <div class="table-wrap short"><table class="table" id="rightTable"><thead></thead><tbody></tbody></table></div>
-      <div class="hint">点击表头排序；勾选 ☐ 将孔加入曲线对比（左右联动）</div>
+      <div class="hint">点击表头排序；勾选复选框将孔加入曲线对比（左右联动）</div>
     </section>
   </div>
 </main>
@@ -124,7 +134,7 @@
   <div class="modal">
     <div class="modal-head">
       <h2>选择内参基因孔（ΔΔCt 内参归一）</h2>
-      <button class="btn" id="icClose" title="关闭">✕</button>
+      <button class="btn" id="icClose" title="关闭">关闭</button>
     </div>
     <p class="hint">在孔板上<b>点击孔位</b>标记内参基因孔（如 GAPDH 所在孔，支持按住拖动批量选择）；其余有数据的孔视为目的基因。对照组生成与统计图表都会以内参孔为基准归一（内参孔在对照组中保持稳定、不滞后）。</p>
     <div class="ic-tools">
@@ -148,7 +158,7 @@
   <div class="modal">
     <div class="modal-head">
       <h2>学生模拟实验 — 参数设计</h2>
-      <button class="btn" id="synClose" title="关闭">✕</button>
+      <button class="btn" id="synClose" title="关闭">关闭</button>
     </div>
     <p class="hint">输入数据为按参数<b>从零合成</b>的模拟数据；上传后由<b>原版 Roche Kinetic 引擎</b>按真实流程分析（Cq / Slope / EPF / Call 与原软件一致）。参数均带合理范围校验，超出范围会提示。</p>
     <div class="syn-grid">
@@ -177,7 +187,7 @@
       <fieldset>
         <legend>特异性 / 复现</legend>
         <label>熔解峰 <select id="synMelt"><option value="1" selected>单峰（特异性）</option><option value="2">双峰（含引物二聚体）</option></select></label>
-        <label>随机种子 <input type="number" id="synSeed" step="1" placeholder="留空=随机" title="相同种子可复现同一套数据"><span class="range">可选</span></label>
+        <label>数据复现编号 <input type="number" id="synSeed" step="1" placeholder="留空=每次随机" title="填同一个数字，每次生成的模拟数据完全相同（方便课堂统一答案、同学互相核对）；留空则每次随机"><span class="range">选填</span></label>
         <div class="syn-total" id="synTotal">总孔数：18 + NTC 2 = 20</div>
       </fieldset>
     </div>
@@ -212,7 +222,7 @@
       <div class="hint">柱 = 设计真值；圆点 = 引擎实测 Fold Change（2<sup>−ΔΔCt</sup>）</div>
     </div>
     <div class="chart-box wide">
-      <h3>ΔΔCt 明细（真值 vs 实测）<button id="btnDesignCsv" class="btn" style="padding:2px 8px;font-size:11px">导出 CSV</button></h3>
+      <h3>ΔΔCt 明细（真值 vs 实测）<button id="btnDesignCsv" class="btn" style="min-height:26px;padding:0 8px;font-size:12px;margin-left:8px">导出 CSV</button></h3>
       <div class="table-wrap short" style="max-height:240px"><table class="table" id="designTable"><thead></thead><tbody></tbody></table></div>
     </div>
   </div>

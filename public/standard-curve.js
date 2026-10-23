@@ -87,12 +87,13 @@ function renderPlate() {
     div.className = 'well';
     div.dataset.label = label;
     const isStd = stdLabels.has(label), isSel = sel.has(label);
-    let bg = '#1d2537', fg = '#55607c';
-    if (w.sampleId) { bg = '#22304c'; fg = '#9db4d8'; }
-    if (isStd) { bg = '#ffd166'; fg = '#1a2336'; }
-    if (isSel) { bg = '#8a5cf6'; fg = '#fff'; }
-    div.style.background = bg;
-    div.style.color = fg;
+    // 空孔=浅灰、有数据=灰、标准品=主 hue 浅底、当前选中=主 hue 实心
+    let bg = '', fg = '';
+    if (w.sampleId) { bg = '#eeeeee'; fg = '#0f1216'; }
+    if (isStd) { bg = '#e3ecfa'; fg = '#17488f'; }
+    if (isSel) { bg = '#1d5fbf'; fg = '#ffffff'; }
+    if (bg) div.style.background = bg;
+    if (fg) div.style.color = fg;
     if (!w.sampleId && !isStd) div.classList.add('empty');
     if (isSel) div.classList.add('picked');
     const q = state.manual[label] && state.manual[label].quantity;
@@ -147,7 +148,7 @@ function renderCards() {
         ? ' 效率与线性度均在常用可接受范围（90–110%、R² ≥ 0.98）。'
         : ' 未同时满足 90–110% 与 R² ≥ 0.98。'));
   }
-  lines.push(...w.map(x => '⚠ ' + x));
+  lines.push(...w.map(x => x));
   $('fitVerdict').innerHTML = lines.join('<br>');
   $('fitSub').textContent = a.dye ? ' · ' + a.dye : '';
   $('stdSource').textContent = a.fromDesign ? ' · 含 ' + a.fromDesign + ' 个设计标准品孔' : '';
@@ -158,7 +159,7 @@ function renderTable(el, head, rows) {
   const thead = el.querySelector('thead'), tbody = el.querySelector('tbody');
   thead.innerHTML = '<tr>' + head.map((h, i) => '<th' + (i === 0 ? ' class="l"' : '') + '>' + h + '</th>').join('') + '</tr>';
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td class="l" colspan="' + head.length + '" style="color:#5c7399">（无数据）</td></tr>';
+    tbody.innerHTML = '<tr><td class="l" colspan="' + head.length + '" style="color:var(--muted)">（无数据）</td></tr>';
     return;
   }
   tbody.innerHTML = rows.map(r => '<tr>' + r.map((c, i) => '<td' + (i === 0 ? ' class="l"' : '') + '>' + c + '</td>').join('') + '</tr>').join('');
@@ -200,17 +201,17 @@ function renderCharts() {
   const a = state.analysis, fit = a && a.fit;
   const canvas = $('stdCurveChart');
   if (!a || !fit || !fit.ok) {
-    drawLineChart(canvas, [], { height: 360, xLabel: 'log₁₀(浓度)', yLabel: 'Cq', emptyText: '无标准品数据 — 在左侧板面标记标准品孔' });
-    drawLineChart($('stdResidualChart'), [], { height: 200, xLabel: 'log₁₀(浓度)', yLabel: '残差 (Cq)', emptyText: '无残差数据' });
+    drawLineChart(canvas, [], { height: 140, xLabel: 'log₁₀(浓度)', yLabel: 'Cq', emptyText: '无标准品数据 — 在左侧板面标记标准品孔' });
+    drawLineChart($('stdResidualChart'), [], { height: 140, xLabel: 'log₁₀(浓度)', yLabel: '残差 (Cq)', emptyText: '无残差数据' });
     return;
   }
   const pts = a.standards.filter(r => r.cq !== null);
   const xs = fit.log10Range;
   const series = [{
-    name: '标准品实测 Cq', color: '#4da3ff', pointsOnly: true, pointRadius: 4,
+    name: '标准品实测 Cq', color: '#1d5fbf', pointsOnly: true, pointRadius: 4,
     points: pts.map(r => ({ x: r.log10, y: r.cq })),
   }, {
-    name: '拟合直线 (R² = ' + fmtNum(fit.r2, 5) + ')', color: '#ffd166', dash: [6, 4],
+    name: '拟合直线 (R² = ' + fmtNum(fit.r2, 5) + ')', color: '#141414', dash: [6, 4],
     points: [
       { x: xs[0], y: fit.intercept + fit.slope * xs[0] },
       { x: xs[1], y: fit.intercept + fit.slope * xs[1] },
@@ -224,10 +225,10 @@ function renderCharts() {
 
   const res = pts.filter(r => r.residual !== undefined);
   drawLineChart($('stdResidualChart'), [{
-    name: '残差', color: '#7fe3a0', pointsOnly: true, pointRadius: 3.5,
+    name: '残差', color: '#141414', pointsOnly: true, pointRadius: 3.5,
     points: res.map(r => ({ x: r.log10, y: r.residual })),
   }, {
-    name: '零线', color: '#5c7399', dash: [4, 4],
+    name: '零线', color: '#8a8a8a', dash: [4, 4],
     points: [{ x: xs[0], y: 0 }, { x: xs[1], y: 0 }],
   }], { height: 200, xLabel: 'log₁₀(标准品浓度)', yLabel: '残差 (Cq)' });
 }

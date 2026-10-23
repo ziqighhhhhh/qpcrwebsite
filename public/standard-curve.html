@@ -7,18 +7,23 @@
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header>
-  <div class="brand">qPCR <span>Web</span></div>
+<header class="topbar">
+  <div class="brand"><svg class="mark" width="22" height="16" viewBox="0 0 22 16" aria-hidden="true"><g fill="#0f1216"><circle cx="3" cy="3" r="1.7"/><circle cx="8" cy="3" r="1.7"/><circle cx="13" cy="3" r="1.7"/><circle cx="18" cy="3" r="1.7"/><circle cx="3" cy="8" r="1.7"/><circle cx="8" cy="8" r="1.7"/><circle cx="13" cy="8" r="1.7"/><circle cx="18" cy="8" r="1.7"/><circle cx="3" cy="13" r="1.7"/><circle cx="8" cy="13" r="1.7"/><circle cx="18" cy="13" r="1.7"/></g><circle cx="13" cy="13" r="1.7" fill="#1d5fbf"/></svg>qPCR Web</div>
+  <nav class="nav">
+    <a href="/" title="返回 96 孔板命名页（实验设计入口）">孔板命名</a>
+    <a href="/analysis.html" title="上传/分析 .lc96p，ΔΔCt 与统计检验">数据分析</a>
+    <a href="/standard-curve.html" class="active">标准曲线</a>
+  </nav>
   <div class="controls">
-    <a class="btn" href="/" title="返回 96 孔板命名页（实验设计入口）">① 孔板命名</a>
-    <a class="btn" href="/analysis.html" title="上传/分析 .lc96p，ΔΔCt 与统计检验">② 数据分析</a>
-    <a class="btn primary" href="/standard-curve.html">③ 标准曲线</a>
     <button id="btnReload" class="btn">刷新数据</button>
     <span class="spacer"></span>
     <a id="btnCsv" class="btn" href="/api/standard-curve?format=csv" download>导出 CSV</a>
   </div>
-  <div id="status" class="status">正在加载实验…</div>
 </header>
+<div class="pagehead">
+  <h1>标准曲线</h1>
+  <div id="status" class="status">正在加载实验…</div>
+</div>
 
 <main class="duo">
   <div class="col">
@@ -29,15 +34,15 @@
         <label>起始浓度 <input type="number" id="startQty" value="10000000" min="100" max="1e9" step="any" style="width:110px"></label>
         <label>稀释倍数 <input type="number" id="dilution" value="5" min="2" max="100" step="any" style="width:70px"></label>
         <label>单位 <input type="text" id="unit" value="copies" maxlength="24" style="width:80px"></label>
-        <button id="btnFillSeries" class="btn accent">按顺序填充系列</button>
+        <button id="btnFillSeries" class="btn primary">按顺序填充系列</button>
         <button id="btnClearWells" class="btn">清空标准品</button>
         <span class="ic-count" id="selCount">已选 0 孔</span>
       </div>
-      <div class="plate-wrap" style="max-width:520px"><div id="scPlate" class="plate plate-sm"></div></div>
+      <div class="plate-wrap"><div id="scPlate" class="plate plate-sm"></div></div>
       <div class="legend">
-        <span><i class="sw" style="background:#ffd166"></i>标准品</span>
-        <span><i class="sw" style="background:#8a5cf6"></i>当前选中</span>
-        <span><i class="sw" style="background:#1d2537;border:1px solid #26394a"></i>空孔</span>
+        <span><i class="sw" style="background:#e3ecfa"></i>标准品</span>
+        <span><i class="sw" style="background:#1d5fbf"></i>当前选中</span>
+        <span><i class="sw" style="background:#f5f6f8"></i>空孔</span>
       </div>
       <div class="hint">真实 .lc96p 不含浓度信息，需在此手动标记；由「模拟实验设计」生成的实验会带设计浓度（显示为 design 来源），可直接沿用或覆盖。</div>
     </section>

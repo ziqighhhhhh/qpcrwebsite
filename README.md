@@ -28,12 +28,14 @@
 ### 环境要求
 - Windows（引擎为 x86 .NET Framework）
 - Node.js ≥ 16
-- 罗氏 LightCycler 96 软件目录（含 `Bin`、`Gen-KA.adf`、`AlgorithmLibraries\Kinetic\...`）
+- 罗氏的 **引擎目录**：`config.json` 的 `binDir` 只需包含原厂计算引擎（本仓库默认 `..\Bin`，共 27 个文件：`Roche.DP.CalcPack.*`、`Roche.LC120.{Core,Infrastructure.Interface,Infrastructure.Services}`、`Gen-KA.adf` / `Sybr-KA.adf`、`AlgorithmLibraries\Kinetic\1.5.3.1244`、NMath 系列与 `nmath_native_x86.dll`、`log4net.DLL`）。运行时还会自动从 `bridge\` 复制 `engine-bridge.exe` 及其 `.config` 进来。
+
+原厂 GUI 已不在此目录：`LC96.exe`、DevExpress / ChartFX / CAB（`Microsoft.Practices.*`）/ LogicNP 界面库、Run Editor / Sample Editor / Instrument Manager / Analysis 视图模块、报表与 `Reports`、`Configuration\*.xml`、`Templates\*.lc96u` 与 40 MB 的 `Manuals` 均已移出（备份见下方「注意事项」）。网站只调用引擎 DLL，从不启动原厂程序。
 
 ### 运行（一键）
 
 ```bat
-:: 1) 配置 config.json 中的 binDir 指向你的 LC96 软件 Bin 目录
+:: 1) 配置 config.json 中的 binDir 指向引擎目录
 :: 2) 双击 start.bat —— 自动检查 Node、自动编译缺失的 x86 Bridge、启动服务器、打开浏览器
 start.bat
 ```
@@ -242,6 +244,20 @@ PCR 扩增效率（按质量等级：优 100% / 良 98% / 中 96% / 差 94%）�
 
 ## 验证
 
+**真引擎自检（一条命令，不需要浏览器）**：
+
+```bat
+node test\engine-parity.check.js
+```
+
+它会在三点上给出 PASS/FAIL：① 192/192 条曲线都拿到引擎参数（缺 DLL、缺 `engine-bridge.exe.config`、binDir 指错都会在这里硬失败）；② Demo 文件里 Roche 自己存的 36 孔、126 个 Cq/Slope/EPF/Call 值与引擎输出**逐值一致**（EPF 只差 JSON 的 8 位小数舍入）；③ `..\experiments` 下每个真实 `.lc96p` 都 96/96 全覆盖。全部通过时最后一行是：
+
+```
+REAL ENGINE OK — every value below came from Roche.DP.CalcPack (Kinetic 1.5.3.1244), no JS fallback.
+```
+
+清理原厂 GUI 前后，`..\experiments` 4 个真实实验 + Demo 文件共 **27,648 个参数** 做过逐值差分：**0 处不同**。
+
 对 `DemoData\Demo_Qual Detect Dual Color.lc96p` 全量验证：
 
 - 192 条曲线 × (Cq/Slope/EPF/Call) 与 `.lc96p` 内存储结果**全部一致**（EPF 精确到 14 位小数）
@@ -273,6 +289,8 @@ PCR 扩增效率（按质量等级：优 100% / 良 98% / 中 96% / 差 94%）�
 - 引擎为 **x86 32 位**，必须从 `binDir` 目录启动（Bridge 已自动处理）
 - `Gen-KA.adf` 带 RSA 签名，需**保留空白**加载（Bridge 已处理）；不要修改 ADF
 - 需要 Windows 上正常的 CryptoAPI 权限（沙箱/受限令牌下 ADF 签名校验会失败）
+- **`bridge\engine-bridge.exe.config` 不能省**：原引擎用 `Assembly.LoadFrom("file:///…")` 加载 `AlgorithmLibraries\…\*.dll`，.NET 4 在没有 `<loadFromRemoteSources enabled="true"/>` 时会抛 `NotSupportedException`（HRESULT 0x80131515，"尝试从一个网络位置加载程序集"），表现为 Analyze 全部失败。`lib/engine.js` 和 `server.js` 会把 exe 与该配置文件一起复制进 `binDir`。
+- 原厂 GUI 文件（`LC96.exe`、界面库、编辑器/报表模块、模板、手册）已移到 `C:\Users\1\Downloads\PQCR_roche_backup\`（`bin_gui_*` 与 `lc96_assets_*` 两个时间戳目录，含 `_moved_files.txt` 清单）。确认网站无异常后可直接删除该备份；`DemoData\` 里的 11 个演示 `.lc96p` 保留着，真引擎自检要用。
 - 本工具用于学习与数据查看；商业/临床用途请遵循罗氏软件许可
 
 ## 文件结构
@@ -284,6 +302,7 @@ qpcrwebsite/
 ├── config.json        # port / binDir / adf
 ├── bridge/
 │   ├── engine-bridge.cs   # x86 引擎桥（原引擎封装）
+│   ├── engine-bridge.exe.config # loadFromRemoteSources（加载算法插件必需，随 exe 复制）
 │   └── build.bat          # 编译脚本
 ├── lib/
 │   ├── zip.js         # 手写 ZIP 读取
@@ -303,6 +322,6 @@ qpcrwebsite/
 │   ├── standard-curve.js   # 标准曲线页逻辑（孔板、图表、系列稀释填充）
 │   ├── chart-export.js     # 图表 PNG / SVG 导出（所有 canvas）
 │   └── analysis.html  # 数据分析页（上传/分析/对照组/学生模拟/统计/导出）
-├── test/              # 回归测试（仅 *.test.js 入库）
+├── test/              # 回归测试（*.test.js 入库）+ engine-parity.check.js 真引擎自检
 └── data/              # 实验、命名布局与手动标准品持久化（gitignored）
 ```

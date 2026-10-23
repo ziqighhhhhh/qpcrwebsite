@@ -95,35 +95,68 @@ function combinedOf(exp, wellId, dye) {
 function curveOf(exp, wellId, dye) { return exp.curves.find(x => x.well === wellId && x.dye === dye) || null; }
 
 // ---------------- color helpers ----------------
-function hsl(h, s, l) { return 'hsl(' + h + ', ' + s + '%, ' + l + '%)'; }
+// 状态用浅底+深字（pale pair），数值指标用单一 hue 的强度 ramp（achromatic-ledger）
+function lerpColor(a, b, t) {
+  const pa = [1, 3, 5].map(i => parseInt(a.substr(i, 2), 16));
+  const pb = [1, 3, 5].map(i => parseInt(b.substr(i, 2), 16));
+  return '#' + pa.map((v, i) => Math.round(v + (pb[i] - v) * t).toString(16).padStart(2, '0')).join('');
+}
+function inkOn(bg) {
+  // pick a readable text colour for a filled well; returns null when bg is not a hex colour
+  const m = /^#([0-9a-f]{6})$/i.exec(bg || '');
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  const L = (0.2126 * (n >> 16 & 255) + 0.7152 * (n >> 8 & 255) + 0.0722 * (n & 255)) / 255;
+  return L > 0.55 ? '#0f1216' : '#ffffff';
+}
+const RAMP_LO = '#eef4fd', RAMP_HI = '#1d5fbf';   // 弱信号 → 强信号（唯一 hue）
+const NO_DATA = '#f0f0f0';
+// 组序列：对照组用灰，处理组用主 hue，更多组再取暖橙/青 —— 全部图表同一约定
+const GROUP_COLORS = ['#8a8a8a', '#1d5fbf', '#c2410c', '#0e7490'];
 function metricColor(exp, wellId, dye) {
   const d = dyeDataOf(exp, wellId, dye);
   const m = state.metric;
   if (m === 'Call') {
-    if (d.call === 'Positive') return '#37c26b';
-    if (d.call === 'Negative') return '#e05252';
-    return '#3a455e';
+    if (d.call === 'Positive') return '#dcfae5';
+    if (d.call === 'Negative') return '#ffedea';
+    return NO_DATA;
   }
   const v = d[m];
-  if (v === null || v === undefined || isNaN(v)) return '#3a455e';
-  let lo, hi;
-  if (m === 'Cq') { lo = 15; hi = 40; }
+  if (v === null || v === undefined || isNaN(v)) return NO_DATA;
+  let lo, hi, invert = false;
+  if (m === 'Cq') { lo = 15; hi = 40; invert = true; }      // Cq 越低信号越强
   else if (m === 'EPF') { lo = 0; hi = 2.5; }
   else { lo = 0; hi = 0.25; }
-  const t = Math.max(0, Math.min(1, (v - lo) / (hi - lo)));
-  return hsl((1 - t) * 120, 70, 50);
+  let t = Math.max(0, Math.min(1, (v - lo) / (hi - lo)));
+  if (invert) t = 1 - t;
+  return lerpColor(RAMP_LO, RAMP_HI, t);
 }
 function combinedColor(c) {
-  if (c === 'Positive') return '#37c26b';
-  if (c === 'Negative') return '#e05252';
-  if (c === 'Invalid') return '#ffcc33';
-  if (c === 'Inconsistent') return '#ff9f43';
-  return '#3a455e';
+  if (c === 'Positive') return '#dcfae5';
+  if (c === 'Negative') return '#ffedea';
+  if (c === 'Invalid') return '#fef3c7';
+  if (c === 'Inconsistent') return '#ffedd5';
+  return NO_DATA;
 }
 function fmtNum(v, d) {
   if (v === null || v === undefined || isNaN(v)) return '';
   d = d === undefined ? 4 : d;
   return String(Math.round(v * Math.pow(10, d)) / Math.pow(10, d));
+}
+// HTML 转义（设计报告/明细表渲染用）
+const escH = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+// 加载/合成实验后默认选中前几个有曲线的孔，让扩增曲线（每孔一条）立即可见，
+// 而不是停在"未选择孔位"的空图。
+function seedDefaultCurveSelection(exp) {
+  const dye = exp.dyes[0];
+  const picks = [];
+  for (const w of exp.wells) {
+    if (curveOf(exp, w.id, dye)) picks.push(w.id);
+    if (picks.length >= 6) break;
+  }
+  state.compare = new Set(picks);
+  state.selectedWell = picks.length ? picks[0] : null;
 }
 
 // ---------------- plate builders ----------------
@@ -134,7 +167,10 @@ function buildPlate(el, exp, colorFn, titleFn) {
     const hasCurve = !!curveOf(exp, w.id, dye);
     const div = document.createElement('div');
     div.className = 'well' + (hasCurve ? '' : ' empty') + (state.selectedWell === w.id ? ' selected' : '');
-    div.style.background = hasCurve ? colorFn(w.id, dye) : '#1d2537';
+    const bg = hasCurve ? colorFn(w.id, dye) : '';
+    if (bg) div.style.background = bg;
+    const ink = inkOn(bg);
+    if (ink) div.style.color = ink;
     const lay = layoutOf(w.label);
     // 优先显示命名页的 Simple Name（其次 Target），再退回文件样本名
     const sampleText = (lay ? (lay.simple || lay.target) : (w.sampleName || '').replace(/^Sample\s*/i, '')) || w.label;
@@ -157,21 +193,21 @@ function buildPlate(el, exp, colorFn, titleFn) {
 function buildLegend(el, mode) {
   if (mode === 'call') {
     el.innerHTML =
-      '<span><span class="sw" style="background:#37c26b"></span>Positive</span>' +
-      '<span><span class="sw" style="background:#e05252"></span>Negative</span>' +
-      '<span><span class="sw" style="background:#3a455e"></span>无数据</span>';
+      '<span><span class="sw" style="background:#dcfae5"></span>Positive</span>' +
+      '<span><span class="sw" style="background:#ffedea"></span>Negative</span>' +
+      '<span><span class="sw" style="background:#f0f0f0"></span>无数据</span>';
   } else if (mode === 'combined') {
     el.innerHTML =
-      '<span><span class="sw" style="background:#37c26b"></span>Positive</span>' +
-      '<span><span class="sw" style="background:#e05252"></span>Negative</span>' +
-      '<span><span class="sw" style="background:#ffcc33"></span>Invalid</span>' +
-      '<span><span class="sw" style="background:#ff9f43"></span>Inconsistent</span>';
+      '<span><span class="sw" style="background:#dcfae5"></span>Positive</span>' +
+      '<span><span class="sw" style="background:#ffedea"></span>Negative</span>' +
+      '<span><span class="sw" style="background:#fef3c7"></span>Invalid</span>' +
+      '<span><span class="sw" style="background:#ffedd5"></span>Inconsistent</span>';
   } else {
     const m = state.metric;
     el.innerHTML =
-      '<span>低 <span class="sw" style="background:' + hsl(120, 70, 50) + '"></span></span>' +
-      '<span><span class="sw" style="background:' + hsl(60, 70, 50) + '"></span></span>' +
-      '<span><span class="sw" style="background:' + hsl(0, 70, 50) + '"></span> 高</span>' +
+      '<span>弱 <span class="sw" style="background:' + RAMP_LO + '"></span></span>' +
+      '<span><span class="sw" style="background:' + lerpColor(RAMP_LO, RAMP_HI, 0.5) + '"></span></span>' +
+      '<span><span class="sw" style="background:' + RAMP_HI + '"></span> 强</span>' +
       '<span style="margin-left:auto">指标: ' + m + '</span>';
   }
 }
@@ -201,7 +237,7 @@ function renderCurves(side, exp) {
   titleEl.textContent = '· ' + dye + (wells.length ? ' · 孔: ' + wells.map(w => (exp.wells[w - 1] || {}).label).join(', ') : ' · 未选择孔位');
   const series = [];
   const legendItems = [];
-  const colors = ['#4da3ff', '#ff8d6b', '#7fe3a0', '#ffd166', '#c17bff', '#5ad0d0'];
+  const colors = CURVE_PALETTE;
   wells.forEach((w, i) => {
     const d = dyeDataOf(exp, w, dye);
     if (!d.curve || !d.curve.points.length) return;
@@ -212,13 +248,13 @@ function renderCurves(side, exp) {
     series.push({ name: label, color, width: state.selectedWell === w ? 3 : 1.5, dash: state.selectedWell === w ? null : [4, 3], points: d.curve.points.map(p => ({ x: p.c, y: p.f })) });
     legendItems.push('<span class="cl-item"><span class="cl-dot" style="background:' + color + '"></span>' + label + '</span>');
   });
-  legendEl.innerHTML = legendItems.join('') || '<span class="cl-item" style="color:#5c7399">未选择孔位 — 点击热图/表格中的孔</span>';
-  drawLineChart(canvas, series, { xLabel: 'Cycle 循环数', yLabel: 'Fluorescence 荧光', height: 300 });
+  legendEl.innerHTML = legendItems.join('') || '<span class="cl-item" style="color:var(--muted)">未选择孔位 — 点击热图/表格中的孔</span>';
+  drawLineChart(canvas, series, { xLabel: 'Cycle 循环数', yLabel: 'Fluorescence 荧光', height: wells.length ? 300 : 140 });
 }
 
 // ---------------- result table ----------------
 const TABLE_COLS = [
-  { key: 'checkbox', label: '☐', num: false },
+  { key: 'checkbox', label: '', num: false },
   { key: 'Well', label: 'Well', num: false },
   { key: 'Target', label: 'Target', num: false },
   { key: 'Sample', label: 'Sample', num: false },
@@ -315,14 +351,14 @@ function renderMelt(side, exp) {
   const legendEl = side === 'left' ? E.leftMeltLegend : E.rightMeltLegend;
   const dye = exp.dyes[state.channel] || exp.dyes[0];
   if (!exp.melt || !Object.keys(exp.melt).length) {
-    drawLineChart(canvas, [], { xLabel: 'Temperature (°C)', yLabel: 'Fluorescence', emptyText: side === 'right' ? '对照组为模拟数据（熔解形态沿用实验组）' : '无熔解数据' });
+    drawLineChart(canvas, [], { xLabel: 'Temperature (°C)', yLabel: 'Fluorescence', height: 140, emptyText: side === 'right' ? '对照组为模拟数据（熔解形态沿用实验组）' : '无熔解数据' });
     legendEl.innerHTML = '';
     return;
   }
   const wells = [];
   if (state.selectedWell) wells.push(state.selectedWell);
   state.compare.forEach(w => { if (!wells.includes(w)) wells.push(w); });
-  const colors = ['#4da3ff', '#ff8d6b', '#7fe3a0', '#ffd166', '#c17bff', '#5ad0d0'];
+  const colors = CURVE_PALETTE;
   const series = [];
   const legendItems = [];
   wells.forEach((w, i) => {
@@ -335,8 +371,8 @@ function renderMelt(side, exp) {
     series.push({ name: label, color, width: state.selectedWell === w ? 3 : 1.5, dash: state.selectedWell === w ? null : [4, 3], points: m.points.map(p => ({ x: p.t, y: p.f })) });
     legendItems.push('<span class="cl-item"><span class="cl-dot" style="background:' + color + '"></span>' + label + '</span>');
   });
-  legendEl.innerHTML = legendItems.join('') || '<span class="cl-item" style="color:#5c7399">未选择孔位</span>';
-  drawLineChart(canvas, series, { xLabel: 'Temperature (°C)', yLabel: 'Fluorescence', height: 200 });
+  legendEl.innerHTML = legendItems.join('') || '<span class="cl-item" style="color:var(--muted)">未选择孔位</span>';
+  drawLineChart(canvas, series, { xLabel: 'Temperature (°C)', yLabel: 'Fluorescence', height: wells.length ? 200 : 140 });
 }
 
 // ---------------- side rendering ----------------
@@ -372,6 +408,15 @@ function renderAll() {
   renderChannelSelect();
   if (state.left) renderSide('left', state.left); else E.leftTitle.textContent = '未加载实验';
   if (state.right) renderSide('right', state.right); else E.rightTitle.textContent = '未生成对照组 — 点击「生成对照组」';
+  // 空列收成一句诚实的空态：无对照组时左列独占整行，空态说明跟在下方
+  const duo = document.querySelector('main.duo');
+  const lc = document.getElementById('leftCol'), rc = document.getElementById('rightCol');
+  if (lc) lc.classList.toggle('is-empty', !state.left);
+  if (rc) rc.classList.toggle('is-empty', !state.right);
+  if (duo) {
+    duo.classList.toggle('no-right', !state.right);
+    duo.classList.toggle('no-left', !state.left);
+  }
 }
 
 function renderChannelSelect() {
@@ -391,7 +436,8 @@ async function onUpload(file) {
     if (!r.ok) throw new Error(res.error || 'upload failed');
     state.left = await getJSON('/api/experiment');
     state.right = null;
-    state.selectedWell = null; state.compare = new Set(); state.channel = 0;
+    state.channel = 0;
+    seedDefaultCurveSelection(state.left);
     renderAll();
     E.btnAnalyze.disabled = false;
     E.btnIcGene.disabled = false;
@@ -413,7 +459,7 @@ async function onAnalyze() {
     state.left = await getJSON('/api/experiment');
     renderAll();
     E.btnSimulate.disabled = false;
-    setStatus('分析完成 ✓ 已写入 ' + Object.keys(state.left.computed).length + ' 条计算结果（与 LC96 原软件一致）' + ((state.left.settings.internalControlWells || []).length ? ' — 已启用内参归一（' + state.left.settings.internalControlGene + ' ' + state.left.settings.internalControlWells.length + ' 孔）' : ' — 未设置内参基因（可用「设置内参基因」标记）'), 'ok');
+    setStatus('分析完成，已写入 ' + Object.keys(state.left.computed).length + ' 条计算结果（与 LC96 原软件一致）' + ((state.left.settings.internalControlWells || []).length ? ' — 已启用内参归一（' + state.left.settings.internalControlGene + ' ' + state.left.settings.internalControlWells.length + ' 孔）' : ' — 未设置内参基因（可用「设置内参基因」标记）'), 'ok');
   } catch (e) { setStatus('分析失败: ' + e.message, 'err'); E.btnAnalyze.disabled = false; }
 }
 
@@ -493,7 +539,8 @@ async function onAutoLayoutSynthesis() {
     if (!r.ok) throw new Error(res.error || 'synthesize failed');
     state.left = await getJSON('/api/experiment');
     state.right = null;
-    state.selectedWell = null; state.compare = new Set(); state.channel = 0;
+    state.channel = 0;
+    seedDefaultCurveSelection(state.left);
     renderAll();
     E.btnAnalyze.disabled = false;
     E.btnIcGene.disabled = false;
@@ -525,9 +572,11 @@ async function onDesignSynthesis() {
     if (!r.ok) throw new Error(res.error || 'synthesize failed');
     state.left = await getJSON('/api/experiment');
     state.right = null;
-    state.selectedWell = null; state.compare = new Set(); state.channel = 0;
-    // 设计驱动的自动布板覆盖命名视图（真值/基因/样本名叠加显示）
-    if (res.layout) state.layout = res.layout;
+    state.channel = 0;
+    seedDefaultCurveSelection(state.left);
+    // 设计驱动的自动布板与命名页自定义合并：用户手动命名的孔优先保留，
+    // 自动布板只补齐未命名孔（服务端 layout.json 同样按此规则合并）
+    if (res.layout) state.layout = Object.assign({}, res.layout, state.layout);
     renderAll();
     E.btnAnalyze.disabled = false;
     E.btnIcGene.disabled = false;
@@ -552,28 +601,33 @@ async function onDesignSynthesis() {
   }
 }
 
-// 设计报告：卡片 + ΔCt 柱状图 + Fold 对比图 + ΔΔCt 明细表
+// 设计报告：卡片 + ΔCt 柱状图 + Fold 对比图 + ΔΔCt 明细表（多目的基因：逐基因展示）
 function renderDesignReport(report) {
   const an = report.analysis, der = report.derived;
-  const ctrl = an.control || {};
+  const genes = an.genes || [];
   const fmt = (v, d) => (v === null || v === undefined || isNaN(v)) ? '—' : (Math.round(v * Math.pow(10, d || 2)) / Math.pow(10, d || 2)).toString();
   const pText = (p) => (p === null || p === undefined || isNaN(p)) ? '—' : (p < 0.001 ? p.toExponential(2) : p.toFixed(4));
+  const derGene = name => (der.genes || []).find(x => x.name === name) || null;
   const cards = [
     ['设计条件', (report.design && report.design.groups || []).map(g => g.name).join(' / ') + ' · ' + der.bioReps + '×' + der.techReps + ' 重复'],
-    ['目的 / 内参基因', (report.design && report.design.targetGene) + ' / ' + (report.design && report.design.refGene)],
-    ['预期倍数（设计真值）', (report.design && report.design.foldChange) + '× ' + (report.design && report.design.direction === 'up' ? '上调' : '下调')],
+    ['目的 / 内参基因', genes.map(g => g.name).join('、') + ' / ' + (report.design && report.design.refGene)],
+    ['预期倍数（设计真值）', genes.map(g => g.name + ' ' + g.design.foldChange + '× ' + (g.design.direction === 'up' ? '上调' : '下调')).join(' ｜ ')],
     ['PCR 扩增效率（推导）', der.efficiencyPct + '%'],
-    ['预期 Cq 差异（推导）', 'ΔCq ≈ ' + fmt(der.deltaCq) + '（处理组 Cq ≈ ' + fmt(der.treatCq) + '）'],
+    ['预期 Cq 差异（推导）', genes.map(g => g.name + ' ΔCq ≈ ' + fmt(derGene(g.name) && derGene(g.name).deltaCq)).join(' ｜ ')],
   ];
-  for (const t of an.treatments || []) {
-    cards.push([t.name + ' ΔCt', fmt(t.dCt) + ' ± ' + fmt(t.sd, 3) + '（n=' + t.n + '）'],
-      [t.name + ' ΔΔCt / Fold', 'ΔΔCt=' + fmt(t.ddCt) + ' → ' + fmt(t.fold) + '× <span class="' + (t.significant ? 'sig' : '') + '">' + (t.significant ? '*' : 'n.s.') + '</span>'],
-      [t.name + ' Welch t 检验', 'p = ' + pText(t.p) + ' · Cohen\'s d = ' + fmt(t.cohensD, 2)]);
+  for (const g of genes) {
+    for (const t of g.treatments || []) {
+      cards.push([g.name + ' · ' + t.name + ' ΔCt', fmt(t.dCt) + ' ± ' + fmt(t.sd, 3) + '（n=' + t.n + '）'],
+        [g.name + ' · ' + t.name + ' ΔΔCt / Fold', 'ΔΔCt=' + fmt(t.ddCt) + ' → ' + fmt(t.fold) + '× <span class="' + (t.significant ? 'sig' : '') + '">' + (t.significant ? '*' : 'n.s.') + '</span>'],
+        [g.name + ' · ' + t.name + ' Welch t 检验', 'p = ' + pText(t.p) + ' · Cohen\'s d = ' + fmt(t.cohensD, 2)]);
+    }
   }
-  for (const t of an.treatments || []) {
-    if (t.mannWhitney) cards.push(['Mann–Whitney U（生物学重复 ΔCt，双侧）',
-      'U = ' + fmt(t.mannWhitney.u) + ' · p = ' + pText(t.mannWhitney.p) +
-      ' · ' + (t.mannWhitney.method === 'exact' ? '精确置换' : '近似检验')]);
+  for (const g of genes) {
+    for (const t of g.treatments || []) {
+      if (t.mannWhitney) cards.push([g.name + ' · Mann–Whitney U（生物学重复 ΔCt，双侧）',
+        'U = ' + fmt(t.mannWhitney.u) + ' · p = ' + pText(t.mannWhitney.p) +
+        ' · ' + (t.mannWhitney.method === 'exact' ? '精确置换' : '近似检验')]);
+    }
   }
   if (der.standards) {
     const pts = der.standards.points || [];
@@ -583,58 +637,66 @@ function renderDesignReport(report) {
       ['标准曲线检验', '在「③ 标准曲线」页拟合：实测效率应接近设计效率']);
   }
   const qc = an.qc || { abnormal: 0, ntcBad: 0 };
-  cards.push(['异常孔 / QC', '异常孔 ' + qc.abnormal + ' 孔 · NTC ' + (qc.ntcBad ? qc.ntcBad + ' 孔异常 ⚠' : '全部阴性 ✓')]);
+  cards.push(['异常孔 / QC', '异常孔 ' + qc.abnormal + ' 孔 · NTC ' + (qc.ntcBad ? qc.ntcBad + ' 孔异常' : '全部阴性')]);
   E.designCards.innerHTML = cards.map(c =>
     '<div class="ccard"><div class="k">' + c[0] + '</div><div class="v">' + c[1] + '</div></div>').join('');
 
-  // 结论
+  // 结论（逐基因逐处理组）
   const verdicts = [];
-  for (const t of an.treatments || []) {
-    const expect = report.design.foldChange;
-    const got = t.fold;
-    // 下调设计按 1/fold 计偏差
-    const expV = report.design.direction === 'down' ? 1 / expect : expect;
-    const dev = got ? Math.abs(got - expV) / expV : 1;
-    const ok = t.significant && dev < 0.6;
-    const dirOk = t.significant && (expV > 1 ? got > 1 : got < 1); // 方向正确
-    verdicts.push('<b>' + t.name + '：</b>' + (ok
-      ? '实测 Fold ' + fmt(got) + '× 与设计 ' + fmt(expV) + '× 一致（偏差 ' + Math.round(dev * 100) + '%），差异显著'
-      : (t.significant && dirOk
-        ? '实测 Fold ' + fmt(got) + '× 方向与设计 ' + fmt(expV) + '× 一致但幅度偏差 ' + Math.round(dev * 100) + '%（n=' + t.n + ' 波动所致）'
-        : '实测 Fold ' + fmt(got) + '× 偏离设计 ' + fmt(expV) + '×（偏差 ' + Math.round(dev * 100) + '%）或未达显著 — 检查质量等级/重复数')));
+  for (const g of genes) {
+    for (const t of g.treatments || []) {
+      const expect = g.design.foldChange;
+      const got = t.fold;
+      // 下调设计按 1/fold 计偏差
+      const expV = g.design.direction === 'down' ? 1 / expect : expect;
+      const dev = got ? Math.abs(got - expV) / expV : 1;
+      const ok = t.significant && dev < 0.6;
+      const dirOk = t.significant && (expV > 1 ? got > 1 : got < 1); // 方向正确
+      verdicts.push('<b>' + g.name + ' · ' + t.name + '：</b>' + (ok
+        ? '实测 Fold ' + fmt(got) + '× 与设计 ' + fmt(expV) + '× 一致（偏差 ' + Math.round(dev * 100) + '%），差异显著'
+        : (t.significant && dirOk
+          ? '实测 Fold ' + fmt(got) + '× 方向与设计 ' + fmt(expV) + '× 一致但幅度偏差 ' + Math.round(dev * 100) + '%（n=' + t.n + ' 波动所致）'
+          : '实测 Fold ' + fmt(got) + '× 偏离设计 ' + fmt(expV) + '×（偏差 ' + Math.round(dev * 100) + '%）或未达显著 — 检查质量等级/重复数')));
+    }
   }
-  if (qc.ntcBad) verdicts.push('<b>NTC 出现扩增信号 ⚠</b>（设计未开启污染，请检查）');
-  E.designVerdict.innerHTML = '<b>结论（真值 vs 实测）：</b>' + (verdicts.length ? verdicts.join('；') : '对照组基线正常，结果符合设计预期 ✓');
+  if (qc.ntcBad) verdicts.push('<b>NTC 出现扩增信号</b>（设计未开启污染，请检查）');
+  E.designVerdict.innerHTML = '<b>结论（真值 vs 实测）：</b>' + (verdicts.length ? verdicts.join('；') : '对照组基线正常，结果符合设计预期');
 
-  drawDesignDctChart(E.designDctChart, an);
-  drawDesignFoldChart(E.designFoldChart, an, report.design);
+  drawDesignDctChart(E.designDctChart, genes);
+  drawDesignFoldChart(E.designFoldChart, genes);
   renderDesignTable(an, report);
 }
 
 function renderDesignTable(an, report) {
   const fmt = (v, d) => (v === null || v === undefined || isNaN(v)) ? '—' : (Math.round(v * Math.pow(10, d || 2)) / Math.pow(10, d || 2)).toString();
   const rows = [];
-  // 每生物样本一行
-  for (const key of Object.keys(an.samples || {})) {
-    const sm = an.samples[key];
-    rows.push({
-      sample: sm.name, group: sm.group, dCt: sm.dCt, designed: sm.designedDct,
-      targetCq: sm.targetCq, refCq: sm.refCq, n: (sm.wells || []).length,
-    });
+  // 每（生物样本 × 基因）一行
+  for (const g of (an.genes || [])) {
+    for (const key of Object.keys(g.samples || {})) {
+      const sm = g.samples[key];
+      rows.push({
+        gene: g.name, sample: sm.name, group: sm.group, dCt: sm.dCt, designed: sm.designedDct,
+        targetCq: sm.targetCq, refCq: sm.refCq, n: (sm.wells || []).length,
+      });
+    }
   }
-  rows.sort((a, b) => (a.group === b.group ? a.sample.localeCompare(b.sample) : a.group.localeCompare(b.group)));
-  const thead = '<tr><th class="l">样本</th><th class="l">组别</th><th>设计真值 ΔCt</th><th>实测 ΔCt</th><th>目的基因 Cq(均值)</th><th>内参 Cq(均值)</th><th>孔数</th></tr>';
+  rows.sort((a, b) => (a.group === b.group ? (a.gene === b.gene ? a.sample.localeCompare(b.sample) : a.gene.localeCompare(b.gene)) : a.group.localeCompare(b.group)));
+  const thead = '<tr><th class="l">样本</th><th class="l">基因</th><th class="l">组别</th><th>设计真值 ΔCt</th><th>实测 ΔCt</th><th>目的基因 Cq(均值)</th><th>内参 Cq(均值)</th><th>孔数</th></tr>';
   E.designTable.querySelector('thead').innerHTML = thead;
   E.designTable.querySelector('tbody').innerHTML = rows.map(r =>
-    '<tr><td class="l">' + r.sample + '</td><td class="l">' + r.group + '</td><td>' + fmt(r.designed, 3) + '</td><td>' + fmt(r.dCt, 3) + '</td><td>' + fmt(r.targetCq, 2) + '</td><td>' + fmt(r.refCq, 2) + '</td><td>' + r.n + '</td></tr>').join('')
-    || '<tr><td colspan="7" class="l">无可用样本（引擎未检出 Positive 孔）</td></tr>';
-  // 组汇总行
-  const sumRows = (an.groups || []).map(g =>
-    '<tr style="background:#1c2740;font-weight:700"><td class="l" colspan="2">' + g.name + '（n=' + g.n + '）</td><td>' + fmt(g.designedDct, 3) + '</td><td>' + fmt(g.dCt, 3) + ' ± ' + fmt(g.sd, 3) + '</td><td colspan="3" class="l">' + (g.role === 'control' ? '对照组' : '处理组') + '</td></tr>').join('');
-  E.designTable.querySelector('tbody').insertAdjacentHTML('beforeend', sumRows);
+    '<tr><td class="l">' + escH(r.sample) + '</td><td class="l">' + escH(r.gene) + '</td><td class="l">' + escH(r.group) + '</td><td>' + fmt(r.designed, 3) + '</td><td>' + fmt(r.dCt, 3) + '</td><td>' + fmt(r.targetCq, 2) + '</td><td>' + fmt(r.refCq, 2) + '</td><td>' + r.n + '</td></tr>').join('')
+    || '<tr><td colspan="8" class="l">无可用样本（引擎未检出 Positive 孔）</td></tr>';
+  // 组汇总行：按（组 × 基因）
+  const sumRows = [];
+  for (const g of (an.genes || [])) {
+    for (const gr of (g.groups || [])) {
+      sumRows.push('<tr class="sumrow"><td class="l" colspan="2">' + escH(g.name) + ' · ' + escH(gr.name) + '（n=' + gr.n + '）</td><td></td><td>' + fmt(gr.designedDct, 3) + '</td><td>' + fmt(gr.dCt, 3) + ' ± ' + fmt(gr.sd, 3) + '</td><td colspan="3" class="l">' + (gr.role === 'control' ? '对照组' : '处理组') + '</td></tr>');
+    }
+  }
+  E.designTable.querySelector('tbody').insertAdjacentHTML('beforeend', sumRows.join(''));
   E.btnDesignCsv.onclick = () => {
-    const head = 'Sample,Group,DesignedDeltaCt,MeasuredDeltaCt,TargetCqMean,RefCqMean,Wells';
-    const lines = [head].concat(rows.map(r => [r.sample, r.group, fmt(r.designed, 4), fmt(r.dCt, 4), fmt(r.targetCq, 3), fmt(r.refCq, 3), r.n].join(',')));
+    const head = 'Sample,Gene,Group,DesignedDeltaCt,MeasuredDeltaCt,TargetCqMean,RefCqMean,Wells';
+    const lines = [head].concat(rows.map(r => [r.sample, r.gene, r.group, fmt(r.designed, 4), fmt(r.dCt, 4), fmt(r.targetCq, 3), fmt(r.refCq, 3), r.n].join(',')));
     const csv = lines.join('\r\n');
     const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
     const a = document.createElement('a');
@@ -645,8 +707,8 @@ function renderDesignTable(an, report) {
   };
 }
 
-// 各组 ΔCt 柱状图（均值 ± SD，圆点为样本级 ΔCt）
-function drawDesignDctChart(canvas, an) {
+// 各组 ΔCt 柱状图（均值 ± SD，圆点为样本级 ΔCt）；多目的基因时按基因分组并列
+function drawDesignDctChart(canvas, genes) {
   const dpr = window.devicePixelRatio || 1;
   const cssW = canvas.clientWidth || 420, cssH = 240;
   canvas.style.width = cssW + 'px'; canvas.style.height = cssH + 'px';
@@ -654,65 +716,91 @@ function drawDesignDctChart(canvas, an) {
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, cssW, cssH);
-  const pad = { l: 46, r: 16, t: 18, b: 30 };
+  const pad = { l: 46, r: 16, t: 24, b: 30 };
   const iw = cssW - pad.l - pad.r, ih = cssH - pad.t - pad.b;
-  const groups = an.groups || [];
-  if (!groups.length) return;
-  // 样本级 ΔCt 收集（画散点）
+  if (!genes || !genes.length || !genes[0].groups || !genes[0].groups.length) return;
+  const groupNames = genes[0].groups.map(g => g.name);
+  const ng = groupNames.length, ngene = genes.length;
+  // 样本级 ΔCt 收集（画散点）：组名 -> 基因名 -> [dCt...]
   const byGroup = {};
-  for (const key of Object.keys(an.samples || {})) {
-    const sm = an.samples[key];
-    if (sm.dCt === null) continue;
-    (byGroup[sm.group] = byGroup[sm.group] || []).push(sm.dCt);
+  for (const g of genes) {
+    for (const key of Object.keys(g.samples || {})) {
+      const sm = g.samples[key];
+      if (sm.dCt === null) continue;
+      const bg = byGroup[sm.group] || (byGroup[sm.group] = {});
+      bg[g.name] = (bg[g.name] || []).concat(sm.dCt);
+    }
   }
   let lo = Infinity, hi = -Infinity;
-  groups.forEach(g => {
-    const vs = byGroup[g.name] || [];
-    vs.forEach(v => { if (v < lo) lo = v; if (v > hi) hi = v; });
-    if (g.dCt !== null) { if (g.dCt < lo) lo = g.dCt; if (g.dCt > hi) hi = g.dCt; }
-    if (g.dCt !== null && g.sd) { if (g.dCt - g.sd < lo) lo = g.dCt - g.sd; if (g.dCt + g.sd > hi) hi = g.dCt + g.sd; }
-  });
+  for (const g of genes) {
+    for (const gr of g.groups) {
+      const vs = (byGroup[gr.name] || {})[g.name] || [];
+      vs.forEach(v => { if (v < lo) lo = v; if (v > hi) hi = v; });
+      if (gr.dCt !== null) { if (gr.dCt < lo) lo = gr.dCt; if (gr.dCt > hi) hi = gr.dCt; }
+      if (gr.dCt !== null && gr.sd) { if (gr.dCt - gr.sd < lo) lo = gr.dCt - gr.sd; if (gr.dCt + gr.sd > hi) hi = gr.dCt + gr.sd; }
+    }
+  }
   if (!isFinite(lo) || !isFinite(hi)) { lo = 0; hi = 10; }
   const rng = hi - lo || 1; lo -= rng * 0.1; hi += rng * 0.1;
   const sy = v => pad.t + ih - (v - lo) / (hi - lo) * ih;
-  ctx.strokeStyle = '#26304a'; ctx.fillStyle = '#6c82a6'; ctx.font = '11px sans-serif'; ctx.lineWidth = 1;
+  ctx.strokeStyle = THEME.grid; ctx.fillStyle = THEME.tick; ctx.font = '11px sans-serif'; ctx.lineWidth = 1;
   for (let i = 0; i <= 5; i++) {
     const v = lo + (hi - lo) * i / 5, Y = sy(v);
     ctx.beginPath(); ctx.moveTo(pad.l, Y); ctx.lineTo(pad.l + iw, Y); ctx.stroke();
     ctx.textAlign = 'right'; ctx.fillText(Math.round(v * 10) / 10, pad.l - 6, Y + 4);
   }
-  ctx.fillStyle = '#9db4d8'; ctx.textAlign = 'center'; ctx.font = '11px sans-serif';
+  ctx.fillStyle = THEME.label; ctx.textAlign = 'center'; ctx.font = '11px sans-serif';
   ctx.fillText('ΔCt（目的基因 Cq − 内参基因 Cq）', pad.l + iw / 2, cssH - 8);
-  const colors = ['#4da3ff', '#ff8d6b', '#7fe3a0', '#ffd166'];
-  groups.forEach((g, gi) => {
-    const x = pad.l + iw * (gi + 0.5) / groups.length;
-    const bw = Math.min(56, iw / groups.length * 0.5);
-    // 柱（组均值）
-    if (g.dCt !== null) {
-      const y0 = sy(Math.max(lo, 0)), y1 = sy(g.dCt);
-      ctx.fillStyle = colors[gi % colors.length];
-      ctx.fillRect(x - bw / 2, Math.min(y0, y1), bw, Math.abs(y1 - y0));
-      // 误差棒
-      if (g.sd) {
-        ctx.strokeStyle = '#e6eefb'; ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.moveTo(x, sy(g.dCt - g.sd)); ctx.lineTo(x, sy(g.dCt + g.sd)); ctx.stroke();
-        ctx.lineWidth = 1;
+  const colors = CURVE_PALETTE;   // 基因配色与扩增曲线调色板一致
+  const slotW = iw / ng, bw = Math.min(ngene > 1 ? 30 : 56, slotW / ngene * 0.62);
+  groupNames.forEach((gn, gi) => {
+    for (let k = 0; k < ngene; k++) {
+      const g = genes[k];
+      const gr = g.groups[gi] || {};
+      const x = pad.l + slotW * (gi + 0.5) + (k - (ngene - 1) / 2) * (bw + 3);
+      // 柱（组均值）
+      if (gr.dCt !== null && gr.dCt !== undefined) {
+        const y0 = sy(Math.max(lo, 0)), y1 = sy(gr.dCt);
+        ctx.fillStyle = colors[k % colors.length];
+        ctx.fillRect(x - bw / 2, Math.min(y0, y1), bw, Math.abs(y1 - y0));
+        // 误差棒
+        if (gr.sd) {
+          ctx.strokeStyle = THEME.ink; ctx.lineWidth = 1.5;
+          ctx.beginPath(); ctx.moveTo(x, sy(gr.dCt - gr.sd)); ctx.lineTo(x, sy(gr.dCt + gr.sd)); ctx.stroke();
+          ctx.lineWidth = 1;
+        }
+        ctx.fillStyle = THEME.text; ctx.textAlign = 'center'; ctx.font = 'bold 11px sans-serif';
+        ctx.fillText(Math.round(gr.dCt * 100) / 100, x, sy(gr.dCt) - 6);
       }
-      ctx.fillStyle = '#e6eefb'; ctx.textAlign = 'center'; ctx.font = 'bold 12px sans-serif';
-      ctx.fillText(Math.round(g.dCt * 100) / 100, x, sy(g.dCt) - 6);
+      // 样本散点（白芯墨描边，在柱内柱外都可读）
+      const vs = (byGroup[gn] || {})[g.name] || [];
+      vs.forEach((v, i) => {
+        const px = x + ((i % 7) - 3) * 3.5, py = sy(v);
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath(); ctx.arc(px, py, 2.6, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = THEME.ink; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(px, py, 2.6, 0, Math.PI * 2); ctx.stroke();
+      });
     }
-    // 样本散点
-    (byGroup[g.name] || []).forEach((v, i) => {
-      ctx.fillStyle = 'rgba(255,255,255,.75)';
-      ctx.beginPath(); ctx.arc(x + ((i % 7) - 3) * 3.5, sy(v), 2.6, 0, Math.PI * 2); ctx.fill();
-    });
-    ctx.fillStyle = '#9db4d8'; ctx.font = '11px sans-serif';
-    ctx.fillText(g.name, x, cssH - 8);
+    ctx.fillStyle = THEME.label; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(gn, pad.l + slotW * (gi + 0.5), cssH - 8);
   });
+  // 顶部图例：基因名（多基因时）
+  if (ngene > 1) {
+    ctx.textAlign = 'left'; ctx.font = '10px sans-serif';
+    let lx = pad.l;
+    genes.forEach((g, gi) => {
+      ctx.fillStyle = colors[gi % colors.length];
+      ctx.fillRect(lx, 6, 8, 8);
+      ctx.fillStyle = THEME.label;
+      ctx.fillText(g.name, lx + 11, 13);
+      lx += 11 + ctx.measureText(g.name).width + 14;
+    });
+  }
 }
 
-// 相对表达量：设计真值柱 vs 实测 Fold 点
-function drawDesignFoldChart(canvas, an, design) {
+// 相对表达量：设计真值柱 vs 实测 Fold 点；多目的基因时按基因分组并列
+function drawDesignFoldChart(canvas, genes) {
   const dpr = window.devicePixelRatio || 1;
   const cssW = canvas.clientWidth || 420, cssH = 240;
   canvas.style.width = cssW + 'px'; canvas.style.height = cssH + 'px';
@@ -720,47 +808,65 @@ function drawDesignFoldChart(canvas, an, design) {
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, cssW, cssH);
-  const pad = { l: 52, r: 16, t: 18, b: 30 };
+  const pad = { l: 52, r: 16, t: 24, b: 30 };
   const iw = cssW - pad.l - pad.r, ih = cssH - pad.t - pad.b;
-  const treatments = an.treatments || [];
-  const names = ['对照'].concat(treatments.map(t => t.name));
-  const designFolds = [1].concat(treatments.map(t => (design.foldChange * (design.direction === 'down' ? 0 : 1)) || design.foldChange));
-  const measured = [1].concat(treatments.map(t => t.fold));
-  let hi = Math.max(1, ...designFolds, ...measured.filter(v => v !== null && isFinite(v))) * 1.15;
+  if (!genes || !genes.length) return;
+  const names = ['对照'].concat((genes[0].treatments || []).map(t => t.name));
+  // 每（组位次, 基因）的设计真值柱与实测点
+  const designFolds = names.map((n, i) => genes.map(g => i === 0 ? 1 : (((g.treatments[i - 1] || {}).designedFold) ?? 1)));
+  const measured = names.map((n, i) => genes.map(g => i === 0 ? 1 : (g.treatments[i - 1] || {}).fold));
+  let hi = 1;
+  for (let i = 0; i < names.length; i++) for (const v of designFolds[i].concat(measured[i])) {
+    if (v !== null && v !== undefined && isFinite(v) && v > hi) hi = v;
+  }
+  hi = hi * 1.15;
   if (!isFinite(hi) || hi <= 0) hi = 1;
   const lo = 0;
   const sy = v => pad.t + ih - (v - lo) / (hi - lo) * ih;
-  ctx.strokeStyle = '#26304a'; ctx.fillStyle = '#6c82a6'; ctx.font = '11px sans-serif'; ctx.lineWidth = 1;
+  ctx.strokeStyle = THEME.grid; ctx.fillStyle = THEME.tick; ctx.font = '11px sans-serif'; ctx.lineWidth = 1;
   for (let i = 0; i <= 5; i++) {
     const v = lo + (hi - lo) * i / 5, Y = sy(v);
     ctx.beginPath(); ctx.moveTo(pad.l, Y); ctx.lineTo(pad.l + iw, Y); ctx.stroke();
     ctx.textAlign = 'right'; ctx.fillText(Math.round(v * 10) / 10, pad.l - 6, Y + 4);
   }
-  ctx.fillStyle = '#9db4d8'; ctx.textAlign = 'center'; ctx.font = '11px sans-serif';
+  ctx.fillStyle = THEME.label; ctx.textAlign = 'center'; ctx.font = '11px sans-serif';
   ctx.fillText('相对表达量（对照=1）', pad.l + iw / 2, cssH - 8);
-  const colors = ['#4da3ff', '#ff8d6b', '#7fe3a0', '#ffd166'];
+  const colors = CURVE_PALETTE;
+  const ngene = genes.length, slotW = iw / names.length, bw = Math.min(ngene > 1 ? 30 : 56, slotW / ngene * 0.62);
   names.forEach((n, i) => {
-    const x = pad.l + iw * (i + 0.5) / names.length;
-    const bw = Math.min(56, iw / names.length * 0.5);
-    const dF = designFolds[i];
-    // 设计真值柱
-    ctx.fillStyle = colors[i % colors.length] + '55';
-    ctx.fillRect(x - bw / 2, sy(dF), bw, ih - (sy(dF) - pad.t));
-    ctx.fillStyle = colors[i % colors.length];
-    ctx.fillRect(x - bw / 2, sy(dF), bw, 2);
-    // 实测点
-    const mF = measured[i];
-    if (mF !== null && isFinite(mF)) {
-      ctx.fillStyle = '#fff';
-      ctx.beginPath(); ctx.arc(x, sy(mF), 4.5, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = colors[i % colors.length]; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(x, sy(mF), 4.5, 0, Math.PI * 2); ctx.stroke();
-      ctx.fillStyle = '#e6eefb'; ctx.textAlign = 'center'; ctx.font = 'bold 11px sans-serif';
-      ctx.fillText(Math.round(mF * 100) / 100, x, sy(mF) - 8);
+    for (let k = 0; k < ngene; k++) {
+      const x = pad.l + slotW * (i + 0.5) + (k - (ngene - 1) / 2) * (bw + 3);
+      const dF = designFolds[i][k];
+      // 设计真值柱
+      ctx.fillStyle = colors[k % colors.length] + '55';
+      ctx.fillRect(x - bw / 2, sy(dF), bw, ih - (sy(dF) - pad.t));
+      ctx.fillStyle = colors[k % colors.length];
+      ctx.fillRect(x - bw / 2, sy(dF), bw, 2);
+      // 实测点
+      const mF = measured[i][k];
+      if (mF !== null && mF !== undefined && isFinite(mF)) {
+        ctx.fillStyle = '#fff';
+        ctx.beginPath(); ctx.arc(x, sy(mF), 4.5, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = colors[k % colors.length]; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(x, sy(mF), 4.5, 0, Math.PI * 2); ctx.stroke();
+        ctx.fillStyle = THEME.text; ctx.textAlign = 'center'; ctx.font = 'bold 11px sans-serif';
+        ctx.fillText(Math.round(mF * 100) / 100, x, sy(mF) - 8);
+      }
     }
-    ctx.fillStyle = '#9db4d8'; ctx.font = '11px sans-serif';
-    ctx.fillText(n, x, cssH - 8);
+    ctx.fillStyle = THEME.label; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(n, pad.l + slotW * (i + 0.5), cssH - 8);
   });
+  if (ngene > 1) {
+    ctx.textAlign = 'left'; ctx.font = '10px sans-serif';
+    let lx = pad.l;
+    genes.forEach((g, gi) => {
+      ctx.fillStyle = colors[gi % colors.length];
+      ctx.fillRect(lx, 6, 8, 8);
+      ctx.fillStyle = THEME.label;
+      ctx.fillText(g.name, lx + 11, 13);
+      lx += 11 + ctx.measureText(g.name).width + 14;
+    });
+  }
 }
 
 // ---------------- student simulation (synthetic experiment) ----------------
@@ -829,7 +935,8 @@ async function onSynthesize() {
     if (!r.ok) throw new Error(res.error || 'synthesize failed');
     state.left = await getJSON('/api/experiment');
     state.right = null;
-    state.selectedWell = null; state.compare = new Set(); state.channel = 0;
+    state.channel = 0;
+    seedDefaultCurveSelection(state.left);
     renderAll();
     E.btnAnalyze.disabled = false;
     E.btnIcGene.disabled = false;
@@ -850,8 +957,8 @@ async function onSynthesize() {
 function renderQC(exp, params, derived) {
   const cards = [];
   const ok = (v) => '<span class="v sig">' + v + '</span>';
-  const warn = (v) => '<span class="v" style="color:#ffcc33">' + v + '</span>';
-  const bad = (v) => '<span class="v" style="color:#ff7a7a">' + v + '</span>';
+  const warn = (v) => '<span class="v" style="color:var(--warning)">' + v + '</span>';
+  const bad = (v) => '<span class="v" style="color:var(--negative)">' + v + '</span>';
   const cqOf = (w, dye) => {
     const c = exp.computed[w + '|' + dye];
     return c && c['11 Intermediate Call'] === 'Positive' ? c['26 CT1'] : null;
@@ -882,8 +989,8 @@ function renderQC(exp, params, derived) {
   const sdMean = sds.length ? sds.reduce((a, b) => a + b, 0) / sds.length : null;
   const sdMax = sds.length ? Math.max(...sds) : null;
   const sdNote = params && params.techSd !== undefined ? '（设定 SD ' + params.techSd + '）' : '';
-  const sdTxt = sdMean === null ? '—' : (sdMean < 0.5 ? ok(sdMean.toFixed(3)) : warn(sdMean.toFixed(3) + ' ⚠ 偏高'));
-  cards.push(['复孔 SD（样本内，' + sds.length + ' 样本）', sdTxt + (sdMax !== null && sdMax >= 1 ? '，最大 ' + sdMax.toFixed(3) + ' ⚠' : ''), '技术重复稳定性' + sdNote]);
+  const sdTxt = sdMean === null ? '—' : (sdMean < 0.5 ? ok(sdMean.toFixed(3)) : warn(sdMean.toFixed(3) + ' 偏高'));
+  cards.push(['复孔 SD（样本内，' + sds.length + ' 样本）', sdTxt + (sdMax !== null && sdMax >= 1 ? '，最大 ' + sdMax.toFixed(3) : ''), '技术重复稳定性' + sdNote]);
   // 2) NTC
   const ntcIds = groups['NTC'] || [];
   let ntcAllNeg = true;
@@ -891,7 +998,7 @@ function renderQC(exp, params, derived) {
     const c = exp.computed[w + '|SYBR Green I'];
     if (!c || c['11 Intermediate Call'] !== 'Negative') ntcAllNeg = false;
   }
-  cards.push(['NTC 无扩增', ntcIds.length ? (ntcAllNeg ? ok('✓ 全部 Negative') : bad('✗ 出现非 Negative')) : '未设置', '阴性对照 ' + ntcIds.length + ' 孔']);
+  cards.push(['NTC 无扩增', ntcIds.length ? (ntcAllNeg ? ok('全部 Negative') : bad('出现非 Negative')) : '未设置', '阴性对照 ' + ntcIds.length + ' 孔']);
   // 3) IC stability — 设计驱动模式：内参基因是 SYBR 通道独立孔（refGene），
   //    计算其 Cq 稳定性；旧模式：Yellow555 探针通道。
   let icWells = [];
@@ -908,7 +1015,7 @@ function renderQC(exp, params, derived) {
     const m = icCqs.reduce((a, b) => a + b, 0) / icCqs.length;
     const sd = icCqs.length > 1 ? Math.sqrt(icCqs.reduce((a, b) => a + (b - m) ** 2, 0) / (icCqs.length - 1)) : 0;
     const icLabel = isDesign ? ('内参稳定性 (' + synth.design.refGene + ')') : '内参稳定性 (Yellow555)';
-    cards.push([icLabel, sd < 0.5 ? ok('Cq ' + m.toFixed(2) + ' ± ' + sd.toFixed(3)) : warn('Cq ' + m.toFixed(2) + ' ± ' + sd.toFixed(3) + ' ⚠ 波动大'), icCqs.length + ' 孔']);
+    cards.push([icLabel, sd < 0.5 ? ok('Cq ' + m.toFixed(2) + ' ± ' + sd.toFixed(3)) : warn('Cq ' + m.toFixed(2) + ' ± ' + sd.toFixed(3) + ' 波动大'), icCqs.length + ' 孔']);
   } else {
     cards.push(['内参稳定性', '未设置', '—']);
   }
@@ -933,7 +1040,7 @@ function renderQC(exp, params, derived) {
     cards.push(['组间差异 (Ctrl vs Treat)', '样本不足', '—']);
   }
   E.qcCards.innerHTML = cards.map(c =>
-    '<div class="ccard"><div class="k">' + c[0] + '</div><div class="v">' + c[1] + '</div><div style="font-size:10px;color:#5c7399">' + c[2] + '</div></div>').join('');
+    '<div class="ccard"><div class="k">' + c[0] + '</div><div class="v">' + c[1] + '</div><div class="s">' + c[2] + '</div></div>').join('');
   // verdict
   const ntcOk = ntcIds.length === 0 || ntcAllNeg;
   const icOk = !icWells.length || (() => { const icDye = isDesign ? 'SYBR Green I' : 'Yellow555'; const icCqs = icWells.map(w => cqOf(w.id, icDye)).filter(v => v !== null); if (icCqs.length < 2) return true; const m = icCqs.reduce((a, b) => a + b, 0) / icCqs.length; const sd = Math.sqrt(icCqs.reduce((a, b) => a + (b - m) ** 2, 0) / (icCqs.length - 1)); return sd < 0.5; })();
@@ -941,7 +1048,7 @@ function renderQC(exp, params, derived) {
   if (sdMean !== null && sdMean >= 0.5) verdicts.push('复孔 SD 偏高');
   if (!ntcOk) verdicts.push('NTC 出现扩增信号');
   if (!icOk) verdicts.push('内参波动大');
-  E.qcVerdict.innerHTML = '<b>QC 结论：</b>' + (verdicts.length ? '存在 ' + verdicts.join('、') + ' — 建议学生检查实验设计' : '全部指标通过，模拟数据符合预期（输入为模拟、处理为真实引擎流程）✓');
+  E.qcVerdict.innerHTML = '<b>QC 结论：</b>' + (verdicts.length ? '存在 ' + verdicts.join('、') + ' — 建议学生检查实验设计' : '全部指标通过，模拟数据符合预期（输入为模拟、处理为真实引擎流程）');
 }
 
 // Student-t two-tailed p-value (Numerical Recipes betai approximation)
@@ -1029,23 +1136,23 @@ function drawRelExpr(canvas, comp) {
   if (hi <= lo) hi = lo + 1;
   const sy = v => pad.t + ih - (v - lo) / (hi - lo) * ih;
   // grid
-  ctx.strokeStyle = '#26304a'; ctx.fillStyle = '#6c82a6'; ctx.font = '11px sans-serif'; ctx.lineWidth = 1;
+  ctx.strokeStyle = THEME.grid; ctx.fillStyle = THEME.tick; ctx.font = '11px sans-serif'; ctx.lineWidth = 1;
   for (let i = 0; i <= 5; i++) {
     const v = lo + (hi - lo) * i / 5, Y = sy(v);
     ctx.beginPath(); ctx.moveTo(pad.l, Y); ctx.lineTo(pad.l + iw, Y); ctx.stroke();
     ctx.textAlign = 'right'; ctx.fillText(v.toFixed(v < 0.1 ? 4 : 2), pad.l - 6, Y + 4);
   }
-  ctx.fillStyle = '#9db4d8'; ctx.textAlign = 'center'; ctx.font = '11px sans-serif';
+  ctx.fillStyle = THEME.label; ctx.textAlign = 'center'; ctx.font = '11px sans-serif';
   ctx.fillText(axisTitle, pad.l + iw / 2, cssH - 8);
   // bars (group mean); with IC, overlay per-sample relative expression scatter
   const groups = norm
     ? [
-        { label: '对照组', v: 1, color: '#4da3ff', x: pad.l + iw * 0.3, samples: norm.ctrl.relExpr },
-        { label: '实验组', v: fold, color: '#ff8d6b', x: pad.l + iw * 0.7, samples: norm.treat.relExpr },
+        { label: '对照组', v: 1, color: THEME.grey, x: pad.l + iw * 0.3, samples: norm.ctrl.relExpr },
+        { label: '实验组', v: fold, color: THEME.accent, x: pad.l + iw * 0.7, samples: norm.treat.relExpr },
       ]
     : [
-        { label: '对照组', v: 1, color: '#4da3ff', x: pad.l + iw * 0.3 },
-        { label: '实验组', v: fold, color: '#ff8d6b', x: pad.l + iw * 0.7 },
+        { label: '对照组', v: 1, color: THEME.grey, x: pad.l + iw * 0.3 },
+        { label: '实验组', v: fold, color: THEME.accent, x: pad.l + iw * 0.7 },
       ];
   const barW = 52;
   groups.forEach(g => {
@@ -1054,9 +1161,9 @@ function drawRelExpr(canvas, comp) {
     ctx.fillStyle = g.color;
     ctx.fillRect(g.x - barW / 2, Y, barW, hgt);
     // value label on top
-    ctx.fillStyle = '#e6eefb'; ctx.textAlign = 'center'; ctx.font = 'bold 12px sans-serif';
+    ctx.fillStyle = THEME.text; ctx.textAlign = 'center'; ctx.font = 'bold 12px sans-serif';
     ctx.fillText(g.v.toFixed(g.v < 0.1 ? 4 : 2), g.x, Y - 6);
-    ctx.fillStyle = '#9db4d8'; ctx.font = '11px sans-serif';
+    ctx.fillStyle = THEME.label; ctx.font = '11px sans-serif';
     ctx.fillText(g.label, g.x, cssH - 8);
     // per-sample relative expression (ΔΔCt normalized) as scatter on top of bar
     if (g.samples && g.samples.length) {
@@ -1072,13 +1179,13 @@ function drawRelExpr(canvas, comp) {
   });
   // error bar on treatment (foldHi/foldLo)
   const eYlo = sy(Math.max(foldLo, lo)), eYhi = sy(Math.min(foldHi, hi));
-  ctx.strokeStyle = '#ff8d6b'; ctx.lineWidth = 2;
+  ctx.strokeStyle = THEME.accent; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.moveTo(groups[1].x, eYlo); ctx.lineTo(groups[1].x, eYhi); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(groups[1].x - 8, eYlo); ctx.lineTo(groups[1].x + 8, eYlo); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(groups[1].x - 8, eYhi); ctx.lineTo(groups[1].x + 8, eYhi); ctx.stroke();
   // significance stars between bars
   if (comp.significant) {
-    ctx.fillStyle = '#ffd166'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillStyle = THEME.ink; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'center';
     const yStar = pad.t + 2;
     ctx.fillText(comp.pairedT.stars, (groups[0].x + groups[1].x) / 2, yStar);
   }
@@ -1100,12 +1207,12 @@ function drawCqDist(canvas, comp) {
   const norm = comp.normalized;
   const groups = norm
     ? [
-        { label: '实验组', values: norm.treat.dCtValues, color: '#4da3ff', summary: summaryOf(norm.treat.dCtValues) },
-        { label: '对照组', values: norm.ctrl.dCtValues, color: '#ff8d6b', summary: summaryOf(norm.ctrl.dCtValues) },
+        { label: '实验组', values: norm.treat.dCtValues, color: THEME.accent, summary: summaryOf(norm.treat.dCtValues) },
+        { label: '对照组', values: norm.ctrl.dCtValues, color: THEME.grey, summary: summaryOf(norm.ctrl.dCtValues) },
       ]
     : [
-        { label: '实验组', s: comp.treat.summary, color: '#4da3ff' },
-        { label: '对照组', s: comp.ctrl.summary, color: '#ff8d6b' },
+        { label: '实验组', s: comp.treat.summary, color: THEME.accent },
+        { label: '对照组', s: comp.ctrl.summary, color: THEME.grey },
       ];
   let lo = Infinity, hi = -Infinity;
   groups.forEach(g => {
@@ -1114,13 +1221,13 @@ function drawCqDist(canvas, comp) {
   });
   const rng = hi - lo || 1; lo -= rng * 0.08; hi += rng * 0.08;
   const sy = v => pad.t + ih - (v - lo) / (hi - lo) * ih;
-  ctx.strokeStyle = '#26304a'; ctx.fillStyle = '#6c82a6'; ctx.font = '11px sans-serif'; ctx.lineWidth = 1;
+  ctx.strokeStyle = THEME.grid; ctx.fillStyle = THEME.tick; ctx.font = '11px sans-serif'; ctx.lineWidth = 1;
   for (let i = 0; i <= 5; i++) {
     const v = lo + (hi - lo) * i / 5, Y = sy(v);
     ctx.beginPath(); ctx.moveTo(pad.l, Y); ctx.lineTo(pad.l + iw, Y); ctx.stroke();
     ctx.textAlign = 'right'; ctx.fillText(Math.round(v * 10) / 10, pad.l - 6, Y + 4);
   }
-  ctx.fillStyle = '#9db4d8'; ctx.textAlign = 'center'; ctx.font = '11px sans-serif';
+  ctx.fillStyle = THEME.label; ctx.textAlign = 'center'; ctx.font = '11px sans-serif';
   ctx.fillText(norm ? 'ΔCt（目的 − ' + norm.icGene + '）' : 'Cq', pad.l + iw / 2, cssH - 8);
   groups.forEach((g, gi) => {
     const x = pad.l + iw * (0.5 * gi + 0.25);
@@ -1134,7 +1241,7 @@ function drawCqDist(canvas, comp) {
     // box: Q1..Q3, median, min..max whiskers
     const y1 = sy(s.q1), y3 = sy(s.q3), ymed = sy(s.median), ymin = sy(s.min), ymax = sy(s.max);
     const bw = 40;
-    ctx.strokeStyle = '#e6eefb'; ctx.lineWidth = 2;
+    ctx.strokeStyle = THEME.ink; ctx.lineWidth = 2;
     ctx.strokeRect(x - bw / 2, y1, bw, y3 - y1);
     ctx.beginPath(); ctx.moveTo(x - bw / 2, ymed); ctx.lineTo(x + bw / 2, ymed); ctx.stroke();
     ctx.lineWidth = 1;
@@ -1145,7 +1252,7 @@ function drawCqDist(canvas, comp) {
     // label + median value
     ctx.fillStyle = g.color; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
     ctx.fillText(g.label, x, cssH - 8);
-    ctx.fillStyle = '#e6eefb';
+    ctx.fillStyle = THEME.text;
     ctx.fillText('中位 ' + Math.round(s.median * 10) / 10, x, pad.t - 2);
   });
 }
@@ -1170,7 +1277,7 @@ function renderDdctTable(comp) {
   E.ddctTable.querySelector('tbody').innerHTML = tbody || '<tr><td colspan="5" class="l">无配对阳性孔</td></tr>';
   // append normalized summary row(s) if internal control was used
   if (norm) {
-    const row = '<tr style="background:#1c2740;font-weight:700"><td class="l" colspan="5">内参归一（' + norm.icGene + ' ' + norm.icWells.length + ' 孔）：处理 ΔCt=' + norm.treat.dCt.toFixed(2) + '，对照 ΔCt=' + norm.ctrl.dCt.toFixed(2) + '，ΔΔCt=' + norm.ddCt.toFixed(2) + '，表达倍数=' + (norm.fold >= 100 ? Math.round(norm.fold) : norm.fold.toFixed(2)) + '×</td></tr>';
+    const row = '<tr class="sumrow"><td class="l" colspan="5">内参归一（' + norm.icGene + ' ' + norm.icWells.length + ' 孔）：处理 ΔCt=' + norm.treat.dCt.toFixed(2) + '，对照 ΔCt=' + norm.ctrl.dCt.toFixed(2) + '，ΔΔCt=' + norm.ddCt.toFixed(2) + '，表达倍数=' + (norm.fold >= 100 ? Math.round(norm.fold) : norm.fold.toFixed(2)) + '×</td></tr>';
     E.ddctTable.querySelector('tbody').insertAdjacentHTML('beforeend', row);
   }
   E.btnDdctCsv.onclick = () => {
@@ -1211,7 +1318,6 @@ function icRenderPlate() {
     const div = document.createElement('div');
     div.className = 'well' + (hasCurve ? '' : ' empty') + (icSelection.has(w.id) ? ' ic' : '');
     div.dataset.well = w.id;
-    div.style.background = hasCurve ? '#1f2a44' : '#1d2537';
     div.innerHTML = '<span class="well-label">' + (w.sampleName || '').replace(/^Sample\s*/i, '') + '</span><span class="well-pos">' + w.label + '</span>';
     if (!hasCurve) { div.title = w.label + ' 无数据'; }
     else {
@@ -1327,6 +1433,7 @@ function init() {
     if (s.experiment) {
       return getJSON('/api/experiment').then(exp => {
         state.left = exp;
+        seedDefaultCurveSelection(exp);
         renderAll();
         E.btnAnalyze.disabled = !!exp.analyzedAt;
         E.btnIcGene.disabled = false;
