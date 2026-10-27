@@ -65,6 +65,24 @@
   </div>
 </section>
 
+<!-- 技术复孔清洗层（Auto-qPCR 风格）：分组 → 离群剔除 → 缺失规则 → 均值±SD -->
+<section class="sim-summary" id="cleaningPanel" hidden>
+  <h2>技术复孔清洗 <span id="cleaningNote" class="col-sub"></span></h2>
+  <div id="cleaningWarnings" class="verdict"></div>
+  <div class="stats-charts">
+    <div class="chart-box">
+      <h3>复孔组散点（每孔一个点 + 均值线）</h3>
+      <canvas id="cleaningChart" width="420" height="260"></canvas>
+      <div class="hint">蓝点 = 采用孔；橙圈 = 剔除孔（离群/缺失）；方块 = Cq=40 代入孔</div>
+    </div>
+    <div class="chart-box wide">
+      <h3>复孔组汇总（样本 × 靶基因）<button id="btnCleaningCsv" class="btn" style="min-height:26px;padding:0 8px;font-size:12px">导出 CSV</button></h3>
+      <div class="table-wrap short" style="max-height:240px"><table class="table" id="cleaningTable"><thead></thead><tbody></tbody></table></div>
+      <div class="hint">n / mean±SD / CV 为清洗后结果，是归一化与统计的唯一输入；被剔除孔在导出 CSV 中逐孔注明</div>
+    </div>
+  </div>
+</section>
+
 <main class="duo">
   <div class="col" id="leftCol">
     <div class="col-head">原始数据（实验组）<span id="leftTitle" class="col-sub"></span></div>
@@ -230,6 +248,7 @@
 
 <script src="/static/chart.js"></script>
 <script src="/static/statistics.js"></script>
+<script src="/static/cleaning.js"></script>
 <script src="/static/app.js"></script>
 <script src="/static/chart-export.js"></script>
 </body>

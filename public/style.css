@@ -147,6 +147,10 @@ label.btn input[hidden] { position: absolute; }
   color: var(--text); font-size: var(--fs-body); line-height: 1.55;
 }
 
+/* ---- 技术复孔清洗层 ---- */
+.clean-flag { color: var(--warning); font-weight: 600; }
+.clean-warnrow td { background: var(--pill-negative-bg, #fdf0ef); }
+
 /* ---- 双栏工作区 ---- */
 main.duo {
   display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); padding: 14px 20px;

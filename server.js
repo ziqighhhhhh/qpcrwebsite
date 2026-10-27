@@ -23,6 +23,7 @@ const syn = require('./lib/synthesize.js');
 const design = require('./lib/design.js');
 const standardcurve = require('./lib/standardcurve.js');
 const { compareGroups } = require('./lib/compare.js');
+const cleaning = require('./lib/cleaning.js');
 const engine = require('./lib/engine.js');
 engine.configure({ binDir: config.binDir, projectDir, adf: config.adf || 'Gen-KA.adf' });
 
@@ -141,6 +142,10 @@ const server = http.createServer(async (req, res) => {
   const p = url.pathname;
   if (req.method === 'GET' && p === '/static/statistics.js') {
     sendText(res, 200, fs.readFileSync(path.join(projectDir, 'lib', 'stats.js'), 'utf8'), 'application/javascript; charset=utf-8');
+    return;
+  }
+  if (req.method === 'GET' && p === '/static/cleaning.js') {
+    sendText(res, 200, fs.readFileSync(path.join(projectDir, 'lib', 'cleaning.js'), 'utf8'), 'application/javascript; charset=utf-8');
     return;
   }
   try {
@@ -388,6 +393,39 @@ const server = http.createServer(async (req, res) => {
       if (!experiment || !controlExperiment) { sendJson(res, 404, { error: 'need experiment + control (run /api/simulate first)' }); return; }
       const comp = compareGroups(experiment, controlExperiment, experiment.wells.length);
       sendJson(res, 200, { ok: true, treatment: experiment.name, control: controlExperiment.name, compare: comp });
+      return;
+    }
+    if (req.method === 'GET' && p === '/api/cleaning') {
+      if (!experiment) { sendJson(res, 404, { error: 'no experiment loaded' }); return; }
+      const layoutNames = readLayoutWells();
+      const cleanSide = (exp) => {
+        const assignments = cleaning.assignByConventions(exp, layoutNames);
+        const groups = cleaning.buildGroups(exp.wells, assignments, exp.computed, exp.dyes[0]);
+        return { name: exp.name, groups: groups.length, result: cleaning.cleanReplicates(groups) };
+      };
+      sendJson(res, 200, {
+        ok: true,
+        treatment: cleanSide(experiment),
+        control: controlExperiment ? cleanSide(controlExperiment) : null,
+      });
+      return;
+    }
+    if (req.method === 'GET' && p === '/api/cleaning/export') {
+      if (!experiment) { sendJson(res, 404, { error: 'no experiment loaded' }); return; }
+      const side = url.searchParams.get('side') === 'control' ? controlExperiment : experiment;
+      if (!side) { sendJson(res, 404, { error: 'no ' + (url.searchParams.get('side') || 'treatment') + ' experiment' }); return; }
+      const layoutNames = readLayoutWells();
+      const assignments = cleaning.assignByConventions(side, layoutNames);
+      const groups = cleaning.buildGroups(side.wells, assignments, side.computed, side.dyes[0]);
+      const result = cleaning.cleanReplicates(groups);
+      const format = url.searchParams.get('format') || 'csv';
+      if (format === 'json') { sendJson(res, 200, { ok: true, name: side.name, result }); return; }
+      const body = Buffer.from(cleaning.toCSV(result), 'utf8');
+      res.writeHead(200, {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': 'attachment; filename="cleaning_' + (url.searchParams.get('side') === 'control' ? 'control' : 'treatment') + '.csv"',
+      });
+      res.end(body);
       return;
     }
     if (req.method === 'POST' && p === '/api/load-control') {

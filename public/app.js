@@ -35,6 +35,9 @@ const E = {
   leftTable: $('leftTable'), rightTable: $('rightTable'),
   relChart: $('relChart'), cqChart: $('cqChart'),
   ddctTable: $('ddctTable'), btnDdctCsv: $('btnDdctCsv'),
+  cleaningPanel: $('cleaningPanel'), cleaningNote: $('cleaningNote'),
+  cleaningWarnings: $('cleaningWarnings'), cleaningChart: $('cleaningChart'),
+  cleaningTable: $('cleaningTable'), btnCleaningCsv: $('btnCleaningCsv'),
   leftMelt: $('leftMelt'), leftMeltLegend: $('leftMeltLegend'),
   rightMelt: $('rightMelt'), rightMeltLegend: $('rightMeltLegend'),
   btnSynth: $('btnSynth'), synModal: $('synModal'), synClose: $('synClose'),
@@ -444,6 +447,7 @@ async function onUpload(file) {
     E.btnSimulate.disabled = false;
     E.btnExport.disabled = false;
     E.simResult.hidden = true;
+    E.cleaningPanel.hidden = true;
     setStatus('已加载: ' + file.name + ' — ' + state.left.curves.length + ' 条曲线，点击「设置内参基因」标记内参孔（可选），再 Analyze', 'ok');
   } catch (e) { setStatus('上传失败: ' + e.message, 'err'); }
 }
@@ -458,6 +462,7 @@ async function onAnalyze() {
     if (!r.ok) throw new Error(res.error || 'analyze failed');
     state.left = await getJSON('/api/experiment');
     renderAll();
+    renderCleaning();
     E.btnSimulate.disabled = false;
     setStatus('分析完成，已写入 ' + Object.keys(state.left.computed).length + ' 条计算结果（与 LC96 原软件一致）' + ((state.left.settings.internalControlWells || []).length ? ' — 已启用内参归一（' + state.left.settings.internalControlGene + ' ' + state.left.settings.internalControlWells.length + ' 孔）' : ' — 未设置内参基因（可用「设置内参基因」标记）'), 'ok');
   } catch (e) { setStatus('分析失败: ' + e.message, 'err'); E.btnAnalyze.disabled = false; }
@@ -547,6 +552,7 @@ async function onAutoLayoutSynthesis() {
     E.btnSimulate.disabled = false;
     E.btnExport.disabled = false;
     E.simResult.hidden = true;
+    E.cleaningPanel.hidden = true;
     renderQC(state.left, res.params);
     E.qcReport.hidden = false;
     const by = (res.params && res.params.byRole) || {};
@@ -583,6 +589,7 @@ async function onDesignSynthesis() {
     E.btnSimulate.disabled = false;
     E.btnExport.disabled = false;
     E.simResult.hidden = true;
+    E.cleaningPanel.hidden = true;
     renderQC(state.left, res.derived, res.derived);
     E.qcReport.hidden = false;
     // 设计分析报告（真值 vs 实测 + ΔCt/ΔΔCt/Fold/统计）
@@ -943,6 +950,7 @@ async function onSynthesize() {
     E.btnSimulate.disabled = false;
     E.btnExport.disabled = false;
     E.simResult.hidden = true;
+    E.cleaningPanel.hidden = true;
     renderQC(state.left, res.params);
     E.qcReport.hidden = false;
     synClose();
@@ -1254,6 +1262,127 @@ function drawCqDist(canvas, comp) {
     ctx.fillText(g.label, x, cssH - 8);
     ctx.fillStyle = THEME.text;
     ctx.fillText('中位 ' + Math.round(s.median * 10) / 10, x, pad.t - 2);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 技术复孔清洗层 (lib/cleaning.js, Auto-qPCR style): grouped wells → outlier
+// removal → missing-Cq rules → mean±SD summary. statsInput of the result is
+// the only valid input for downstream normalization/statistics.
+// ---------------------------------------------------------------------------
+async function renderCleaning() {
+  if (!state.left) { E.cleaningPanel.hidden = true; return; }
+  let res;
+  try { res = await getJSON('/api/cleaning'); } catch (e) { E.cleaningPanel.hidden = true; return; }
+  const side = res.treatment;
+  if (!side || !side.groups) {
+    E.cleaningPanel.hidden = false;
+    E.cleaningNote.textContent = '— 无复孔组（需在孔板命名页标注样本与靶基因后重新分析）';
+    E.cleaningWarnings.textContent = '';
+    drawCleaningChart(E.cleaningChart, null);
+    E.cleaningTable.querySelector('thead').innerHTML = '';
+    E.cleaningTable.querySelector('tbody').innerHTML = '';
+    return;
+  }
+  const r = side.result;
+  const o = r.options;
+  E.cleaningPanel.hidden = false;
+  E.cleaningNote.textContent = '— ' + side.name + '：' + side.groups + ' 个复孔组；阈值 CV>' +
+    (o.cvThreshold * 100) + '% 或 |Cq−中位数|>' + o.deviationThreshold +
+    ' Cq；缺失规则：' + (o.missingRule === 'impute' ? '按 Cq=' + o.imputeCq + ' 代入' : '排除');
+  E.cleaningWarnings.textContent = r.warnings.length ? '⚠ ' + r.warnings.join('；') : '';
+  drawCleaningChart(E.cleaningChart, r);
+  // summary table: one row per (sample × target)
+  const fmt = v => (Number.isFinite(v) ? (Math.round(v * 100) / 100) : '—');
+  E.cleaningTable.querySelector('thead').innerHTML =
+    '<tr><th class="l">样本</th><th class="l">靶基因</th><th>n</th><th>Mean</th><th>SD</th><th>CV%</th><th>剔除</th><th>缺失</th><th>代入</th><th class="l">警告 / 被剔除孔</th></tr>';
+  E.cleaningTable.querySelector('tbody').innerHTML = r.groups.map(g => {
+    const flagged = g.wells.filter(w => w.status === 'excluded' || w.status === 'imputed');
+    const detail = flagged.map(w =>
+      '<span class="clean-flag" title="' + escH(w.reason) + '">' + escH(w.label) + '✕' + escH(reasonText(w.reason)) + '</span>'
+    ).join(' ');
+    const warn = g.warnings.map(reasonText).join(';');
+    return '<tr' + (g.warnings.length ? ' class="clean-warnrow"' : '') + '><td class="l">' + escH(g.sample) + '</td><td class="l">' + escH(g.target) +
+      '</td><td>' + g.n + '</td><td>' + fmt(g.mean) + '</td><td>' + fmt(g.sd) + '</td><td>' +
+      (Number.isFinite(g.cv) ? Math.round(g.cv * 10000) / 100 : '—') + '</td><td>' + g.nOutliers +
+      '</td><td>' + g.nMissing + '</td><td>' + g.nImputed + '</td><td class="l">' +
+      (warn ? '<span class="clean-flag">' + escH(warn) + '</span> ' : '') + detail + '</td></tr>';
+  }).join('') || '<tr><td colspan="10" class="l">无复孔组</td></tr>';
+  E.btnCleaningCsv.onclick = () => { window.location.href = '/api/cleaning/export?format=csv'; };
+}
+function reasonText(reason) {
+  return ({ outlier: '离群', negative: '阴性', invalid: '无效', no_cq: '无Cq', undetermined: '未定',
+    imputed_negative: '代入(阴)', imputed_invalid: '代入(无效)', imputed_no_cq: '代入', imputed_undetermined: '代入',
+    all_replicates_missing: '全部复孔缺失', all_replicates_imputed: '全部为代入值' })[reason] || reason;
+}
+
+function drawCleaningChart(canvas, result) {
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth || 420, cssH = 260;
+  canvas.style.width = cssW + 'px'; canvas.style.height = cssH + 'px';
+  canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+  const pad = { l: 46, r: 16, t: 16, b: 40 };
+  const iw = cssW - pad.l - pad.r, ih = cssH - pad.t - pad.b;
+  const groups = result ? result.groups.filter(g => g.wells.length) : [];
+  if (!groups.length) {
+    ctx.fillStyle = THEME.tick; ctx.font = '13px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('无复孔组 — 需在孔板命名页标注样本与靶基因', cssW / 2, cssH / 2);
+    return;
+  }
+  const cqs = [];
+  groups.forEach(g => g.wells.forEach(w => { if (Number.isFinite(w.cq)) cqs.push(w.cq); }));
+  let lo = Math.min(...cqs), hi = Math.max(...cqs);
+  const rng = hi - lo || 1; lo -= rng * 0.08; hi += rng * 0.08;
+  const sy = v => pad.t + ih - (v - lo) / (hi - lo) * ih;
+  ctx.strokeStyle = THEME.grid; ctx.fillStyle = THEME.tick; ctx.font = '11px sans-serif'; ctx.lineWidth = 1;
+  for (let i = 0; i <= 5; i++) {
+    const v = lo + (hi - lo) * i / 5, Y = sy(v);
+    ctx.beginPath(); ctx.moveTo(pad.l, Y); ctx.lineTo(pad.l + iw, Y); ctx.stroke();
+    ctx.textAlign = 'right'; ctx.fillText(Math.round(v * 10) / 10, pad.l - 6, Y + 4);
+  }
+  ctx.fillStyle = THEME.label; ctx.textAlign = 'center';
+  ctx.fillText('Cq', 14, pad.t + ih / 2);
+  const slot = iw / groups.length;
+  groups.forEach((g, gi) => {
+    const x = pad.l + slot * (gi + 0.5);
+    // wells, jittered deterministically around the group centre
+    g.wells.forEach((w, i) => {
+      if (!Number.isFinite(w.cq)) return;
+      const jx = x + ((i % 5) - 2) * Math.min(6, slot / 8);
+      const Y = sy(w.cq);
+      if (w.status === 'used') {
+        ctx.fillStyle = THEME.accent;
+        ctx.beginPath(); ctx.arc(jx, Y, 3, 0, Math.PI * 2); ctx.fill();
+      } else if (w.status === 'imputed') {
+        ctx.fillStyle = THEME.grey;
+        ctx.fillRect(jx - 3, Y - 3, 6, 6);
+      } else if (w.reason === 'outlier') {
+        ctx.strokeStyle = THEME.warning; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(jx, Y, 4.5, 0, Math.PI * 2); ctx.stroke();
+        ctx.fillStyle = THEME.warning;
+        ctx.beginPath(); ctx.arc(jx, Y, 2, 0, Math.PI * 2); ctx.fill();
+        ctx.lineWidth = 1;
+      } else {
+        ctx.strokeStyle = THEME.grey; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(jx - 3, Y - 3); ctx.lineTo(jx + 3, Y + 3);
+        ctx.moveTo(jx + 3, Y - 3); ctx.lineTo(jx - 3, Y + 3); ctx.stroke();
+      }
+    });
+    // mean line of the cleaned group
+    if (g.usable) {
+      ctx.strokeStyle = THEME.ink; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(x - slot * 0.32, sy(g.mean)); ctx.lineTo(x + slot * 0.32, sy(g.mean)); ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+    // group label: sample · target, truncated to fit the slot
+    let label = g.sample + '·' + g.target;
+    while (label.length > 3 && ctx.measureText(label).width > slot - 4) label = label.slice(0, -2);
+    ctx.fillStyle = THEME.label; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(label, x, cssH - 22);
+    ctx.font = '11px sans-serif';
   });
 }
 

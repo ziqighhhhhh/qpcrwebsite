@@ -32,6 +32,9 @@ function refsIn(code) {
 // Ids created at runtime rather than present in the static markup.
 const dynamicIds = new Set([
   'dsGName',        // index.html: 组名输入框按组数动态生成（id="dsGName<i>"）
+  'dsTName',        // index.html: 靶基因输入框按组数动态生成（id="dsTName<i>"）
+  'dsTFold',        // index.html: 表达倍数输入框动态生成（id="dsTFold<i>"）
+  'dsTDir',         // index.html: 表达方向下拉框动态生成（id="dsTDir<i>"）
 ]);
 
 for (const page of ['index.html', 'analysis.html', 'standard-curve.html']) {
